@@ -47,7 +47,8 @@ const client = new MongoClient(uri, {
 async function run() {
   try {
     // Connect the client to the server	(optional starting in v4.7)
-    await client.connect();
+    // await client.connect();
+    client.connect();
 
     // Get the database and collection on which to run the operation
     const usersCollection = client.db("bookOceanBdDB").collection("users");
@@ -226,19 +227,49 @@ async function run() {
       res.send({ insertResult, deleteResult });
     });
     // get allorder
-    app.get("/orders", async (req, res) => {
+    app.get("/allOrders", async (req, res) => {
       const result = await ordersCollection.find().toArray();
       res.send(result);
     });
+    // get order by email
+    app.get("/orders", verifyJWT, async (req, res) => {
+      const email = req.query.email;
+      if (!email) {
+        res.send([]);
+      }
 
+      const decodedEmail = req.decoded.email;
+      if (email !== decodedEmail) {
+        return res
+          .status(403)
+          .send({ error: true, message: "Forbidden access" });
+      }
+      const query = { email: email };
+
+      const result = await ordersCollection.find(query).toArray();
+      res.send(result);
+    });
     // order approve
-    app.patch("/orders/status/:id", verifyJWT, async (req, res) => {
+    app.patch("/orders/approve-order/:id", verifyJWT, async (req, res) => {
       const id = req.params.id;
       console.log(id);
       const filter = { _id: new ObjectId(id) };
       const updateDoc = {
         $set: {
           status: "approve",
+        },
+      };
+      const result = await ordersCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+    // order cancel
+    app.patch("/orders/cancel-order/:id", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      console.log(id);
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          status: "canceled",
         },
       };
       const result = await ordersCollection.updateOne(filter, updateDoc);
@@ -274,6 +305,7 @@ async function run() {
     });
 
     // order stats
+    // not used
     app.get("/order-stats", verifyJWT, verifyAdmin, async (req, res) => {
       const pipeline = [
         {
