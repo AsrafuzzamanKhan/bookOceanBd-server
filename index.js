@@ -53,6 +53,7 @@ async function run() {
     // Get the database and collection on which to run the operation
     const usersCollection = client.db("bookOceanBdDB").collection("users");
     const booksCollection = client.db("bookOceanBdDB").collection("books");
+    const bannersCollection = client.db("bookOceanBdDB").collection("banners");
     const cartCollection = client.db("bookOceanBdDB").collection("carts");
     const ordersCollection = client.db("bookOceanBdDB").collection("orders");
     const reviewsCollection = client.db("bookOceanBdDB").collection("reviews");
@@ -143,12 +144,34 @@ async function run() {
       res.send(result);
     });
 
-    // delete menu
+    // delete books
 
     app.delete("/books/:id", verifyJWT, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await booksCollection.deleteOne(query);
+      res.send(result);
+    });
+
+    // baner
+    app.get("/banners", async (req, res) => {
+      const result = await bannersCollection.find().toArray();
+      res.send(result);
+    });
+    // post  banner
+    app.post("/banners", verifyJWT, verifyAdmin, async (req, res) => {
+      const query = req.body;
+      const result = await bannersCollection.insertOne(query);
+      res.send(result);
+    });
+
+    // delete banner
+
+    app.delete("/banner/:id", verifyJWT, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+
+      const query = { _id: new ObjectId(id) };
+      const result = await bannersCollection.deleteOne(query);
       res.send(result);
     });
 
