@@ -145,7 +145,6 @@ async function run() {
     });
 
     // delete books
-
     app.delete("/books/:id", verifyJWT, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
@@ -153,7 +152,7 @@ async function run() {
       res.send(result);
     });
 
-    // baner
+    // banner
     app.get("/banners", async (req, res) => {
       const result = await bannersCollection.find().toArray();
       res.send(result);
@@ -254,6 +253,7 @@ async function run() {
       const result = await ordersCollection.find().toArray();
       res.send(result);
     });
+
     // get order by email
     app.get("/orders", verifyJWT, async (req, res) => {
       const email = req.query.email;
@@ -296,6 +296,14 @@ async function run() {
         },
       };
       const result = await ordersCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
+    // order cancel
+    // delete cart
+    app.delete("/orders/:id", async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await ordersCollection.deleteOne(query);
       res.send(result);
     });
 
