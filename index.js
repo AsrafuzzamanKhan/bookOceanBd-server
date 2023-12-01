@@ -298,6 +298,19 @@ async function run() {
       const result = await ordersCollection.updateOne(filter, updateDoc);
       res.send(result);
     });
+    // order delivery
+    app.patch("/orders/delivery-order/:id", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      console.log(id);
+      const filter = { _id: new ObjectId(id) };
+      const updateDoc = {
+        $set: {
+          status: "delivered",
+        },
+      };
+      const result = await ordersCollection.updateOne(filter, updateDoc);
+      res.send(result);
+    });
     // order cancel
     // delete cart
     app.delete("/orders/:id", async (req, res) => {
