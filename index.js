@@ -152,6 +152,34 @@ async function run() {
       res.send(result);
     });
 
+    // update Books information
+
+    app.put("/books/:id", verifyJWT, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const filter = { _id: new ObjectId(id) };
+      const bookInfo = req.body;
+      const option = { upsert: true };
+      const updatedBook = {
+        $set: {
+          name: bookInfo.name,
+          author: bookInfo.author,
+          category: bookInfo.category,
+          price: bookInfo.price,
+          cover: bookInfo.cover,
+          available: bookInfo.available,
+          new: bookInfo.new,
+          best: bookInfo.best,
+          description: bookInfo.description,
+        },
+      };
+      const result = await booksCollection.updateOne(
+        filter,
+        updatedBook,
+        option
+      );
+      res.send(result);
+    });
+
     // banner
     app.get("/banners", async (req, res) => {
       const result = await bannersCollection.find().toArray();
