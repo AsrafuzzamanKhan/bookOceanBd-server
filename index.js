@@ -205,6 +205,14 @@ async function run() {
     // cart insart
     app.post("/carts", async (req, res) => {
       const item = req.body;
+      const query = { bookId: item.bookId };
+
+      // check exixting
+      const exixtingCartItem = await cartCollection.findOne(query);
+      console.log("exixted", exixtingCartItem);
+      if (exixtingCartItem) {
+        return res.send({ message: "Existed" });
+      }
       const result = await cartCollection.insertOne(item);
       res.send(result);
     });
