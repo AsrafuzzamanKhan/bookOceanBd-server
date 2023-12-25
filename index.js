@@ -208,11 +208,11 @@ async function run() {
       const query = { bookId: item.bookId };
 
       // check exixting
-      const exixtingCartItem = await cartCollection.findOne(query);
-      console.log("exixted", exixtingCartItem);
-      if (exixtingCartItem) {
-        return res.send({ message: "Existed" });
-      }
+      // const exixtingCartItem = await cartCollection.findOne(query);
+      // console.log("exixted", exixtingCartItem);
+      // if (exixtingCartItem) {
+      //   return res.send({ message: "Existed" });
+      // }
       const result = await cartCollection.insertOne(item);
       res.send(result);
     });
