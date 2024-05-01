@@ -170,6 +170,13 @@ async function run() {
           new: bookInfo.new,
           best: bookInfo.best,
           description: bookInfo.description,
+          dimensions: bookInfo.dimensions,
+          isbn10: bookInfo.isbn10,
+          isbn13: bookInfo.isbn13,
+          itemWeight: bookInfo.itemWeight,
+          language: bookInfo.language,
+          page: bookInfo.page,
+          publisher: bookInfo.publisher,
         },
       };
       const result = await booksCollection.updateOne(
