@@ -162,6 +162,7 @@ async function run() {
       const updatedBook = {
         $set: {
           name: bookInfo.name,
+          image: bookInfo.image,
           author: bookInfo.author,
           category: bookInfo.category,
           price: bookInfo.price,
