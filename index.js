@@ -59,10 +59,11 @@ async function run() {
     const reviewsCollection = client.db("bookOceanBdDB").collection("reviews");
 
     // jwt
+    const age = 1000 * 60 * 60 * 24 * 7;
     app.post("/jwt", (req, res) => {
       const user = req.body;
       const token = jwt.sign(user, process.env.ACCESS_TOKEN_SECRET, {
-        expiresIn: "1h",
+        expiresIn: age,
       });
       res.send({ token });
     });
