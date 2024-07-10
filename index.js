@@ -9,7 +9,7 @@ const port = process.env.PORT || 5000;
 
 // middleware
 // app.use(cors());
-app.use(cors({ origin: process.env.CLIENBT_URL, credentials: true }));
+app.use(cors({ origin: process.env.CLIENBT_URL }));
 app.use(express.json());
 
 // jwt token
