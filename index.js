@@ -9,11 +9,7 @@ const port = process.env.PORT || 5000;
 
 // middleware
 // app.use(cors());
-app.use(
-  cors({
-    origin: "https://bookoceanbd.com",
-  })
-);
+app.use(cors({ origin: process.env.CLIENBT_URL, credentials: true }));
 app.use(express.json());
 
 // jwt token
@@ -136,6 +132,13 @@ async function run() {
       const query = { email: email };
       const user = await usersCollection.findOne(query);
       const result = { admin: user?.role === "admin" };
+      res.send(result);
+    });
+    // delete user
+    app.delete("/users/:id", verifyJWT, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const query = { _id: new ObjectId(id) };
+      const result = await usersCollection.deleteOne(query);
       res.send(result);
     });
 
