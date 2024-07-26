@@ -135,7 +135,7 @@ async function run() {
       res.send(result);
     });
     // delete user
-    app.delete("/users/:id", verifyJWT, verifyAdmin, async (req, res) => {
+    app.delete("/users/:id", verifyJWT, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await usersCollection.deleteOne(query);
@@ -163,7 +163,7 @@ async function run() {
     });
 
     // update Books information
-
+    //  image: bookInfo.image,
     app.put("/books/:id", verifyJWT, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const filter = { _id: new ObjectId(id) };
@@ -172,7 +172,6 @@ async function run() {
       const updatedBook = {
         $set: {
           name: bookInfo.name,
-          image: bookInfo.image,
           author: bookInfo.author,
           category: bookInfo.category,
           price: bookInfo.price,
