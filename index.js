@@ -1,16 +1,29 @@
 const express = require("express");
 const cors = require("cors");
-const app = express();
-
-const { ObjectId } = require("mongodb");
+const compression = require("compression"); // Added for speed
+const { ObjectId, MongoClient, ServerApiVersion} = require("mongodb");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
+
+const app = express();
 const port = process.env.PORT || 5000;
 
 // middleware
+app.use(compression()); // Compresses JSON data for faster loading
 app.use(cors());
 // app.use(cors({ origin: process.env.CLIENBT_URL }));
 app.use(express.json());
+
+// connect mongodb 
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.6kqiq.mongodb.net/?retryWrites=true&w=majority`;
+// Create a MongoClient with a MongoClientOptions object to set the Stable API version
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  },
+});
 
 // jwt token
 const verifyJWT = (req, res, next) => {
@@ -34,17 +47,8 @@ const verifyJWT = (req, res, next) => {
   });
 };
 
-const { MongoClient, ServerApiVersion } = require("mongodb");
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.6kqiq.mongodb.net/?retryWrites=true&w=majority`;
 
-// Create a MongoClient with a MongoClientOptions object to set the Stable API version
-const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  },
-});
+
 
 async function run() {
   try {
