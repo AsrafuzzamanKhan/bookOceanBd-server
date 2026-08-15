@@ -4,7 +4,11 @@ const compression = require("compression"); // Added for speed
 const { ObjectId, MongoClient, ServerApiVersion} = require("mongodb");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
-const admin = require("firebase-admin");
+// firebase-admin v14 uses a modular API (like the client SDK v9+) - there is
+// no top-level admin.credential.cert()/admin.auth() anymore, those moved to
+// the firebase-admin/app and firebase-admin/auth submodules.
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
 const { sendOrderStatusEmail, sendPasswordResetEmail } = require("./mailer");
 
 // Firebase Admin - used to generate password reset links server-side so we
@@ -15,14 +19,14 @@ const { sendOrderStatusEmail, sendPasswordResetEmail } = require("./mailer");
 // Service Accounts -> Generate new private key, base64-encoded onto one line.
 // Everything that depends on this (just /auth/forgot-password) no-ops safely
 // if it isn't set.
-let firebaseAdminReady = false;
+let firebaseAuth = null;
 if (process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
   try {
     const serviceAccount = JSON.parse(
       Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf8")
     );
-    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
-    firebaseAdminReady = true;
+    const firebaseApp = initializeApp({ credential: cert(serviceAccount) });
+    firebaseAuth = getAuth(firebaseApp);
   } catch (err) {
     console.error("[firebase-admin] failed to parse FIREBASE_SERVICE_ACCOUNT_BASE64:", err.message);
   }
@@ -117,13 +121,13 @@ async function run() {
       if (!email) {
         return res.status(400).send({ error: true, message: "email is required" });
       }
-      if (!firebaseAdminReady) {
+      if (!firebaseAuth) {
         console.error("[forgot-password] firebase-admin not configured, cannot generate reset link");
         return res.send(genericResponse);
       }
 
       try {
-        const resetLink = await admin.auth().generatePasswordResetLink(email);
+        const resetLink = await firebaseAuth.generatePasswordResetLink(email);
         await sendPasswordResetEmail(email, resetLink);
       } catch (err) {
         // e.g. auth/user-not-found - deliberately swallowed, see comment above
