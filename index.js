@@ -5,7 +5,7 @@ const { ObjectId, MongoClient, ServerApiVersion} = require("mongodb");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const { initFirebaseAdminLite } = require("./firebaseAdminLite");
-const { sendOrderStatusEmail, sendPasswordResetEmail } = require("./mailer");
+const { sendOrderStatusEmail, sendPasswordResetEmail, sendVerificationEmail } = require("./mailer");
 
 // Used to generate password reset links server-side so we can email them
 // ourselves (branded, via mailer.js) instead of relying on Firebase's own
@@ -134,6 +134,36 @@ async function run() {
       } catch (err) {
         // e.g. auth/user-not-found - deliberately swallowed, see comment above
         console.error(`[forgot-password] failed for ${email}:`, err.message);
+      }
+      res.send(genericResponse);
+    });
+
+    // send/resend an email-verification link - public (called right after
+    // signup, before the user necessarily has a working session, and again
+    // from the "resend" button on the verify-email banner). Generates a real
+    // Firebase verification link server-side and emails it ourselves via
+    // mailer.js instead of Firebase's own default email (same reasoning as
+    // /auth/forgot-password - branding + deliverability).
+    app.post("/auth/send-verification-email", async (req, res) => {
+      const { email } = req.body;
+      const genericResponse = {
+        success: true,
+        message: "If an account exists for this email, a verification link has been sent.",
+      };
+
+      if (!email) {
+        return res.status(400).send({ error: true, message: "email is required" });
+      }
+      if (!firebaseAuth) {
+        console.error("[send-verification-email] firebase-admin not configured, cannot generate verification link");
+        return res.send(genericResponse);
+      }
+
+      try {
+        const verifyLink = await firebaseAuth.generateEmailVerificationLink(email);
+        await sendVerificationEmail(email, verifyLink);
+      } catch (err) {
+        console.error(`[send-verification-email] failed for ${email}:`, err.message);
       }
       res.send(genericResponse);
     });

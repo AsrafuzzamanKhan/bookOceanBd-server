@@ -1,5 +1,5 @@
 // A minimal, dependency-light replacement for the parts of firebase-admin we
-// actually need (just: generate a password reset link).
+// actually need (generate password-reset and email-verification links).
 //
 // The full `firebase-admin` npm package pulls in Firestore, Cloud Storage,
 // google-gax, protobufjs and friends - a huge dependency tree that blew past
@@ -51,28 +51,32 @@ async function getGoogleAccessToken(serviceAccount) {
   return data.access_token;
 }
 
-// Returns a function bound to this service account: generatePasswordResetLink(email)
+// Returns { generatePasswordResetLink(email), generateEmailVerificationLink(email) }
+// bound to this service account.
 function initFirebaseAdminLite(serviceAccount) {
-  return {
-    generatePasswordResetLink: async (email) => {
-      const accessToken = await getGoogleAccessToken(serviceAccount);
-      const res = await fetch(
-        `https://identitytoolkit.googleapis.com/v1/projects/${serviceAccount.project_id}/accounts:sendOobCode`,
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${accessToken}`,
-          },
-          body: JSON.stringify({ requestType: "PASSWORD_RESET", email, returnOobLink: true }),
-        }
-      );
-      const data = await res.json();
-      if (!data.oobLink) {
-        throw new Error(data.error?.message || `Failed to generate reset link: ${JSON.stringify(data).slice(0, 300)}`);
+  async function sendOobCode(requestType, email) {
+    const accessToken = await getGoogleAccessToken(serviceAccount);
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/projects/${serviceAccount.project_id}/accounts:sendOobCode`,
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+        },
+        body: JSON.stringify({ requestType, email, returnOobLink: true }),
       }
-      return data.oobLink;
-    },
+    );
+    const data = await res.json();
+    if (!data.oobLink) {
+      throw new Error(data.error?.message || `Failed to generate ${requestType} link: ${JSON.stringify(data).slice(0, 300)}`);
+    }
+    return data.oobLink;
+  }
+
+  return {
+    generatePasswordResetLink: (email) => sendOobCode("PASSWORD_RESET", email),
+    generateEmailVerificationLink: (email) => sendOobCode("VERIFY_EMAIL", email),
   };
 }
 

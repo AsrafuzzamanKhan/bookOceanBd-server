@@ -219,6 +219,17 @@ function buildPasswordResetHtml(resetLink) {
   `);
 }
 
+function buildVerificationHtml(verifyLink) {
+  return buildLayout(`
+    <p style="font-size: 16px; font-weight: bold; text-align:center;">Verify your email</p>
+    <p>Thanks for creating a Book Ocean BD account! Please confirm this is really your email address by clicking the button below.</p>
+    <p style="text-align: center; margin: 28px 0;">
+      <a href="${verifyLink}" style="background:#1e293b; color:#ffffff; text-decoration:none; padding:12px 28px; border-radius:6px; font-weight:bold; display:inline-block;">Verify Email Address</a>
+    </p>
+    <p style="font-size: 13px; color:#64748b;">If you didn't create this account, you can safely ignore this email.</p>
+  `);
+}
+
 // order: the order document (must have .email, .data.name, .cart, .date,
 // .total, .deliveryCharge, .totalAmount, .data.area)
 // status: 'approve' | 'canceled' (no email is sent for 'delivered')
@@ -256,4 +267,18 @@ async function sendPasswordResetEmail(toEmail, resetLink) {
   });
 }
 
-module.exports = { sendOrderStatusEmail, sendPasswordResetEmail };
+// verifyLink: a Firebase email-verification action link, generated
+// server-side via firebaseAdminLite.generateEmailVerificationLink()
+// (see index.js /auth/send-verification-email)
+async function sendVerificationEmail(toEmail, verifyLink) {
+  if (!isConfigured) return;
+  await transporter.sendMail({
+    from: FROM,
+    to: toEmail,
+    subject: "Verify your email for Book Ocean BD",
+    html: buildVerificationHtml(verifyLink),
+    attachments: LOGO_ATTACHMENT,
+  });
+}
+
+module.exports = { sendOrderStatusEmail, sendPasswordResetEmail, sendVerificationEmail };
