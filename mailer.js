@@ -29,6 +29,17 @@ const transporter = isConfigured
 
 const FROM = `"Book Ocean BD" <${EMAIL_USER}>`;
 
+const SUPPORT_FOOTER_HTML = `
+  <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
+  <p style="font-size: 13px; color:#64748b; line-height: 1.6;">
+    Need help? We're here for you.<br/>
+    📞 <a href="tel:+8801568175528" style="color:#1e293b; text-decoration:none;">+88 01568175528</a><br/>
+    ✉️ <a href="mailto:info@bookoceanbd.com" style="color:#1e293b; text-decoration:none;">info@bookoceanbd.com</a><br/>
+    💬 <a href="https://m.me/bookoceanbd" style="color:#1e293b; text-decoration:none;">m.me/bookoceanbd</a>
+  </p>
+  <p style="font-size: 12px; color: #94a3b8; margin-top: 16px;">Book Ocean BD &middot; bookoceanbd.com</p>
+`;
+
 const COPY = {
   approve: {
     subject: "Your Book Ocean BD order has been approved",
@@ -74,8 +85,22 @@ function buildEmailHtml(order, status) {
         <tr><td style="padding: 4px 0; color:#64748b;">Total</td><td style="text-align:right;">৳${order.totalAmount ?? ""}</td></tr>
       </table>
       <ul style="font-size: 14px; padding-left: 20px;">${items}</ul>
-      <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
-      <p style="font-size: 12px; color: #64748b;">Questions about your order? Just reply to this email.</p>
+      ${SUPPORT_FOOTER_HTML}
+    </div>
+  `;
+}
+
+function buildPasswordResetHtml(resetLink) {
+  return `
+    <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1e293b;">
+      <h2 style="margin-bottom: 4px;">Book Ocean BD</h2>
+      <p style="font-size: 16px; font-weight: bold;">Reset your password</p>
+      <p>We received a request to reset the password for your Book Ocean BD account. Click the button below to choose a new one.</p>
+      <p style="text-align: center; margin: 28px 0;">
+        <a href="${resetLink}" style="background:#1e293b; color:#ffffff; text-decoration:none; padding:12px 28px; border-radius:6px; font-weight:bold; display:inline-block;">Reset Password</a>
+      </p>
+      <p style="font-size: 13px; color:#64748b;">This link will expire soon for your security. If you didn't request this, you can safely ignore this email - your password won't be changed.</p>
+      ${SUPPORT_FOOTER_HTML}
     </div>
   `;
 }
@@ -102,4 +127,16 @@ async function sendOrderStatusEmail(order, status) {
   });
 }
 
-module.exports = { sendOrderStatusEmail };
+// resetLink: a Firebase password-reset action link, generated server-side via
+// firebase-admin's generatePasswordResetLink() (see index.js /auth/forgot-password)
+async function sendPasswordResetEmail(toEmail, resetLink) {
+  if (!isConfigured) return;
+  await transporter.sendMail({
+    from: FROM,
+    to: toEmail,
+    subject: "Reset your Book Ocean BD password",
+    html: buildPasswordResetHtml(resetLink),
+  });
+}
+
+module.exports = { sendOrderStatusEmail, sendPasswordResetEmail };

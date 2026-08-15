@@ -4,7 +4,31 @@ const compression = require("compression"); // Added for speed
 const { ObjectId, MongoClient, ServerApiVersion} = require("mongodb");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
-const { sendOrderStatusEmail } = require("./mailer");
+const admin = require("firebase-admin");
+const { sendOrderStatusEmail, sendPasswordResetEmail } = require("./mailer");
+
+// Firebase Admin - used to generate password reset links server-side so we
+// can email them ourselves (branded, via mailer.js) instead of relying on
+// Firebase's own default email (generic sender, no branding, easily flagged
+// as spam). Needs FIREBASE_SERVICE_ACCOUNT_BASE64 in .env: the service
+// account JSON downloaded from Firebase Console -> Project Settings ->
+// Service Accounts -> Generate new private key, base64-encoded onto one line.
+// Everything that depends on this (just /auth/forgot-password) no-ops safely
+// if it isn't set.
+let firebaseAdminReady = false;
+if (process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
+  try {
+    const serviceAccount = JSON.parse(
+      Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf8")
+    );
+    admin.initializeApp({ credential: admin.credential.cert(serviceAccount) });
+    firebaseAdminReady = true;
+  } catch (err) {
+    console.error("[firebase-admin] failed to parse FIREBASE_SERVICE_ACCOUNT_BASE64:", err.message);
+  }
+} else {
+  console.warn("[firebase-admin] FIREBASE_SERVICE_ACCOUNT_BASE64 not set - custom password reset emails are disabled.");
+}
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -73,6 +97,39 @@ async function run() {
         expiresIn: "1h",
       });
       res.send({ token });
+    });
+
+    // forgot password - public (the whole point is the user isn't logged in
+    // yet). Generates a real Firebase reset link server-side and emails it
+    // ourselves via mailer.js instead of Firebase's own default email.
+    //
+    // Always responds with the same generic message regardless of outcome -
+    // this must never reveal whether a given email has an account (that's an
+    // account-enumeration security leak), so failures are only logged, not
+    // surfaced to the caller.
+    app.post("/auth/forgot-password", async (req, res) => {
+      const { email } = req.body;
+      const genericResponse = {
+        success: true,
+        message: "If an account exists for this email, a reset link has been sent.",
+      };
+
+      if (!email) {
+        return res.status(400).send({ error: true, message: "email is required" });
+      }
+      if (!firebaseAdminReady) {
+        console.error("[forgot-password] firebase-admin not configured, cannot generate reset link");
+        return res.send(genericResponse);
+      }
+
+      try {
+        const resetLink = await admin.auth().generatePasswordResetLink(email);
+        await sendPasswordResetEmail(email, resetLink);
+      } catch (err) {
+        // e.g. auth/user-not-found - deliberately swallowed, see comment above
+        console.error(`[forgot-password] failed for ${email}:`, err.message);
+      }
+      res.send(genericResponse);
     });
 
     // Warning : use verifyJWT before middle were verify admin middlewere
