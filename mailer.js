@@ -208,6 +208,28 @@ const SUBJECTS = {
   canceled: "Your Book Ocean BD order has been canceled",
 };
 
+function buildNewOrderAdminHtml(order) {
+  const customer = order.data || {};
+  const areaLabel = customer.area === "dhaka" ? "Inside Dhaka" : customer.area === "outside" ? "Outside Dhaka" : "Not specified";
+
+  return buildLayout(`
+    <p style="font-size: 16px; font-weight: bold;">🔔 New order received</p>
+    <p>A new order just came in and needs review before it's approved.</p>
+    ${orderMetaTableHtml(order, { includeAmount: true })}
+    <table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; color:#64748b;">
+      <tr><td>Customer</td><td style="text-align:right; color:#1e293b;">${escapeHtml(customer.name)}</td></tr>
+      <tr><td>Phone</td><td style="text-align:right;"><a href="tel:${escapeHtml(customer.phone)}" style="color:#1e293b;">${escapeHtml(customer.phone)}</a></td></tr>
+      <tr><td>Email</td><td style="text-align:right;"><a href="mailto:${escapeHtml(order.email)}" style="color:#1e293b;">${escapeHtml(order.email)}</a></td></tr>
+      <tr><td>Delivery Area</td><td style="text-align:right; color:#1e293b;">${areaLabel}</td></tr>
+      <tr><td>Address</td><td style="text-align:right; color:#1e293b;">${escapeHtml(customer.address)}</td></tr>
+    </table>
+    ${invoiceTableHtml(order)}
+    <p style="text-align: center; margin: 24px 0;">
+      <a href="${SITE_URL}/dashboard/allOrders" style="background:#1e293b; color:#ffffff; text-decoration:none; padding:12px 28px; border-radius:6px; font-weight:bold; display:inline-block;">Review &amp; Confirm Order</a>
+    </p>
+  `);
+}
+
 function buildPasswordResetHtml(resetLink) {
   return buildLayout(`
     <p style="font-size: 16px; font-weight: bold; text-align:center;">Reset your password</p>
@@ -254,6 +276,25 @@ async function sendOrderStatusEmail(order, status) {
   });
 }
 
+// adminEmails: array of admin user emails (see index.js POST /orders -
+// looked up from usersCollection where role: "admin", not hardcoded, so it
+// automatically includes anyone promoted to admin via AllUsers.jsx)
+async function sendNewOrderAdminEmail(adminEmails, order) {
+  if (!isConfigured) return;
+  const recipients = (adminEmails || []).filter(Boolean);
+  if (recipients.length === 0) {
+    console.warn(`[mailer] no admin emails on file - skipping new-order notification for order ${order?._id}`);
+    return;
+  }
+  await transporter.sendMail({
+    from: FROM,
+    to: recipients.join(", "),
+    subject: `New order received - #${shortInvoiceId(order)}`,
+    html: buildNewOrderAdminHtml(order),
+    attachments: LOGO_ATTACHMENT,
+  });
+}
+
 // resetLink: a Firebase password-reset action link, generated server-side via
 // firebaseAdminLite.generatePasswordResetLink() (see index.js /auth/forgot-password)
 async function sendPasswordResetEmail(toEmail, resetLink) {
@@ -281,4 +322,4 @@ async function sendVerificationEmail(toEmail, verifyLink) {
   });
 }
 
-module.exports = { sendOrderStatusEmail, sendPasswordResetEmail, sendVerificationEmail };
+module.exports = { sendOrderStatusEmail, sendNewOrderAdminEmail, sendPasswordResetEmail, sendVerificationEmail };

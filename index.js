@@ -5,7 +5,7 @@ const { ObjectId, MongoClient, ServerApiVersion} = require("mongodb");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const { initFirebaseAdminLite } = require("./firebaseAdminLite");
-const { sendOrderStatusEmail, sendPasswordResetEmail, sendVerificationEmail } = require("./mailer");
+const { sendOrderStatusEmail, sendNewOrderAdminEmail, sendPasswordResetEmail, sendVerificationEmail } = require("./mailer");
 
 // Used to generate password reset links server-side so we can email them
 // ourselves (branded, via mailer.js) instead of relying on Firebase's own
@@ -427,6 +427,18 @@ async function run() {
       };
       const deleteResult = await cartCollection.deleteMany(query);
       console.log(insertResult, deleteResult);
+
+      // notify admins so they can review and approve/cancel the order -
+      // looked up by role rather than a hardcoded address, so it automatically
+      // covers anyone promoted to admin via AllUsers.jsx
+      try {
+        const admins = await usersCollection.find({ role: "admin" }).toArray();
+        const adminEmails = admins.map((a) => a.email);
+        await sendNewOrderAdminEmail(adminEmails, { ...orders, _id: insertResult.insertedId });
+      } catch (err) {
+        console.error("Failed to send new-order admin email:", err);
+      }
+
       res.send({ insertResult, deleteResult });
     });
     // get allorder
