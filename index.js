@@ -528,20 +528,15 @@ async function run() {
       const products = await booksCollection.estimatedDocumentCount();
       const orders = await ordersCollection.estimatedDocumentCount();
 
-      //  best way to some of a the price field is to use group and sum operation
-
-      //   const result = await collection.aggregate([
-      //   {
-      //     $group: {
-      //       _id: null,
-      //       totalPrice: { $sum: '$price' }
-      //     }
-      //   }
-      // ]).toArray()
-
-      // orders are stored with a `totalAmount` field (see Checkout.jsx), not `price`
-      const payments = await ordersCollection.find().toArray();
-      const revenue = payments.reduce((sum, payment) => sum + (payment.totalAmount || 0), 0);
+      // Revenue = delivered orders only. This is Cash on Delivery - money
+      // isn't actually collected until the book is delivered, so pending/
+      // approved/canceled orders aren't real revenue yet (previously this
+      // summed every order regardless of status, which overstated revenue).
+      const revenueAgg = await ordersCollection.aggregate([
+        { $match: { status: "delivered" } },
+        { $group: { _id: null, total: { $sum: "$totalAmount" } } },
+      ]).toArray();
+      const revenue = revenueAgg[0]?.total || 0;
 
       res.send({
         users,
