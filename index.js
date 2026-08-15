@@ -4,31 +4,33 @@ const compression = require("compression"); // Added for speed
 const { ObjectId, MongoClient, ServerApiVersion} = require("mongodb");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
-// firebase-admin v14 uses a modular API (like the client SDK v9+) - there is
-// no top-level admin.credential.cert()/admin.auth() anymore, those moved to
-// the firebase-admin/app and firebase-admin/auth submodules.
-const { initializeApp, cert } = require("firebase-admin/app");
-const { getAuth } = require("firebase-admin/auth");
+const { initFirebaseAdminLite } = require("./firebaseAdminLite");
 const { sendOrderStatusEmail, sendPasswordResetEmail } = require("./mailer");
 
-// Firebase Admin - used to generate password reset links server-side so we
-// can email them ourselves (branded, via mailer.js) instead of relying on
-// Firebase's own default email (generic sender, no branding, easily flagged
-// as spam). Needs FIREBASE_SERVICE_ACCOUNT_BASE64 in .env: the service
-// account JSON downloaded from Firebase Console -> Project Settings ->
-// Service Accounts -> Generate new private key, base64-encoded onto one line.
-// Everything that depends on this (just /auth/forgot-password) no-ops safely
-// if it isn't set.
+// Used to generate password reset links server-side so we can email them
+// ourselves (branded, via mailer.js) instead of relying on Firebase's own
+// default email (generic sender, no branding, easily flagged as spam).
+//
+// NOTE: this intentionally does NOT use the `firebase-admin` npm package -
+// that pulls in Firestore/Storage/google-gax/protobufjs, a dependency tree
+// large enough to blow past Vercel's serverless bundle size limit and crash
+// the ENTIRE server (every route, not just this one) on cold start. That
+// happened once already; see firebaseAdminLite.js for the lightweight
+// REST-based replacement. Don't reintroduce firebase-admin here.
+//
+// Needs FIREBASE_SERVICE_ACCOUNT_BASE64 in .env: the service account JSON
+// downloaded from Firebase Console -> Project Settings -> Service Accounts ->
+// Generate new private key, base64-encoded onto one line. Everything that
+// depends on this (just /auth/forgot-password) no-ops safely if it isn't set.
 let firebaseAuth = null;
 if (process.env.FIREBASE_SERVICE_ACCOUNT_BASE64) {
   try {
     const serviceAccount = JSON.parse(
       Buffer.from(process.env.FIREBASE_SERVICE_ACCOUNT_BASE64, "base64").toString("utf8")
     );
-    const firebaseApp = initializeApp({ credential: cert(serviceAccount) });
-    firebaseAuth = getAuth(firebaseApp);
+    firebaseAuth = initFirebaseAdminLite(serviceAccount);
   } catch (err) {
-    console.error("[firebase-admin] failed to parse FIREBASE_SERVICE_ACCOUNT_BASE64:", err.message);
+    console.error("[firebase-admin-lite] failed to parse FIREBASE_SERVICE_ACCOUNT_BASE64:", err.message);
   }
 } else {
   console.warn("[firebase-admin] FIREBASE_SERVICE_ACCOUNT_BASE64 not set - custom password reset emails are disabled.");
