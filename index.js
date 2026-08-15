@@ -4,6 +4,7 @@ const compression = require("compression"); // Added for speed
 const { ObjectId, MongoClient, ServerApiVersion} = require("mongodb");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
+const { sendOrderStatusEmail } = require("./mailer");
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -98,6 +99,21 @@ async function run() {
         return res.send({ message: "User All ready exist" });
       }
       const result = await usersCollection.insertOne(user);
+      res.send(result);
+    });
+
+    // update own profile (name only) - self-service, any logged-in user can
+    // update their own record, matched by the email in their JWT (not the
+    // request body, so nobody can edit someone else's profile by id/email)
+    app.patch("/users/profile", verifyJWT, async (req, res) => {
+      const email = req.decoded.email;
+      const { name } = req.body;
+      if (!name || !name.trim()) {
+        return res.status(400).send({ error: true, message: "name is required" });
+      }
+      const filter = { email };
+      const updateDoc = { $set: { name: name.trim() } };
+      const result = await usersCollection.updateOne(filter, updateDoc);
       res.send(result);
     });
 
@@ -340,6 +356,17 @@ async function run() {
         },
       };
       const result = await ordersCollection.updateOne(filter, updateDoc);
+      if (result.modifiedCount > 0) {
+        const order = await ordersCollection.findOne(filter);
+        // awaited (not fire-and-forget) since this runs on a Vercel serverless
+        // function - it can freeze right after the response is sent, killing
+        // any un-awaited work. Failure here must not fail the status update itself.
+        try {
+          await sendOrderStatusEmail(order, "approve");
+        } catch (err) {
+          console.error("Failed to send approval email:", err);
+        }
+      }
       res.send(result);
     });
     // order cancel
@@ -353,6 +380,14 @@ async function run() {
         },
       };
       const result = await ordersCollection.updateOne(filter, updateDoc);
+      if (result.modifiedCount > 0) {
+        const order = await ordersCollection.findOne(filter);
+        try {
+          await sendOrderStatusEmail(order, "canceled");
+        } catch (err) {
+          console.error("Failed to send cancellation email:", err);
+        }
+      }
       res.send(result);
     });
     // order delivery
@@ -366,6 +401,14 @@ async function run() {
         },
       };
       const result = await ordersCollection.updateOne(filter, updateDoc);
+      if (result.modifiedCount > 0) {
+        const order = await ordersCollection.findOne(filter);
+        try {
+          await sendOrderStatusEmail(order, "delivered");
+        } catch (err) {
+          console.error("Failed to send delivery email:", err);
+        }
+      }
       res.send(result);
     });
 
@@ -395,8 +438,9 @@ async function run() {
       //   }
       // ]).toArray()
 
+      // orders are stored with a `totalAmount` field (see Checkout.jsx), not `price`
       const payments = await ordersCollection.find().toArray();
-      const revenue = payments.reduce((sum, payment) => sum + payment.price, 0);
+      const revenue = payments.reduce((sum, payment) => sum + (payment.totalAmount || 0), 0);
 
       res.send({
         users,

@@ -1,3 +1,5 @@
 node_modules
 .env
 .vercel
+scripts/backfill-thumbnails.log
+scripts/backfill-thumbnails-failures.json
