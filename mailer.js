@@ -44,9 +44,13 @@ if (LOGO_ATTACHMENT.length === 0) {
   console.warn(`[mailer] logo not found at ${LOGO_PATH} - emails will send without it.`);
 }
 
-const LOGO_HEADER_HTML = LOGO_ATTACHMENT.length
-  ? `<img src="cid:${LOGO_CID}" alt="Book Ocean BD" width="72" style="display:block; margin: 0 auto 12px;" />`
-  : `<h2 style="text-align:center; margin-bottom: 12px;">Book Ocean BD</h2>`;
+// small plain-text brand line at the top - the actual logo image goes in the
+// footer instead (per request: logo at the end, not the top)
+const TOP_BRAND_HTML = `<p style="text-align:center; font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; color:#94a3b8; margin: 0 0 16px;">Book Ocean BD</p>`;
+
+const LOGO_FOOTER_HTML = LOGO_ATTACHMENT.length
+  ? `<div style="text-align:center; margin-top: 18px;"><img src="cid:${LOGO_CID}" alt="Book Ocean BD" width="64" style="display:inline-block;" /></div>`
+  : "";
 
 const SUPPORT_FOOTER_HTML = `
   <hr style="border: none; border-top: 1px solid #e2e8f0; margin: 20px 0;" />
@@ -54,16 +58,20 @@ const SUPPORT_FOOTER_HTML = `
     Need help? We're here for you.<br/>
     📞 <a href="tel:+8801568175528" style="color:#1e293b; text-decoration:none;">+88 01568175528</a><br/>
     ✉️ <a href="mailto:info@bookoceanbd.com" style="color:#1e293b; text-decoration:none;">info@bookoceanbd.com</a><br/>
-    💬 <a href="https://m.me/bookoceanbd" style="color:#1e293b; text-decoration:none;">m.me/bookoceanbd</a>
+    💬 <a href="https://m.me/bookoceanbd" style="color:#1e293b; text-decoration:none;">m.me/bookoceanbd</a><br/>
+    📘 <a href="https://www.facebook.com/bookoceanbd/" style="color:#1e293b; text-decoration:none;">facebook.com/bookoceanbd</a><br/>
+    📷 <a href="https://www.instagram.com/bookoceanbd/" style="color:#1e293b; text-decoration:none;">instagram.com/bookoceanbd</a>
   </p>
-  <p style="font-size: 12px; color: #94a3b8; margin-top: 16px;">Book Ocean BD &middot; bookoceanbd.com</p>
+  ${LOGO_FOOTER_HTML}
+  <p style="font-size: 12px; color: #94a3b8; margin-top: 12px; text-align:center;">Book Ocean BD &middot; bookoceanbd.com</p>
 `;
 
-// wraps any email body with the shared logo header + support footer
+// wraps any email body with the shared top brand line + footer (logo,
+// contact info, social links)
 function buildLayout(innerHtml) {
   return `
     <div style="font-family: Arial, sans-serif; max-width: 480px; margin: 0 auto; color: #1e293b;">
-      ${LOGO_HEADER_HTML}
+      ${TOP_BRAND_HTML}
       ${innerHtml}
       ${SUPPORT_FOOTER_HTML}
     </div>
@@ -89,6 +97,23 @@ function deliveryEstimateHtml(order) {
     return "You're outside Dhaka, so expect delivery within <strong>3-4 days</strong>.";
   }
   return "Delivery usually takes up to <strong>72 hours inside Dhaka</strong>, or <strong>3-4 days outside Dhaka</strong>.";
+}
+
+// order.date is stored as 'yyyy-MM-dd HH:mm:ss' (see Checkout.jsx) - split
+// into separate date/time for display rather than one blob string.
+function orderMetaTableHtml(order, { includeAmount = false } = {}) {
+  const [datePart, timePart] = (order.date || "").split(" ");
+  const amountRow = includeAmount
+    ? `<tr><td>Amount</td><td style="text-align:right; font-weight:bold; color:#1e293b;">৳${order.totalAmount ?? ""}</td></tr>`
+    : "";
+  return `
+    <table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; color:#64748b;">
+      <tr><td>Invoice ID</td><td style="text-align:right;">#${escapeHtml(order._id?.toString())}</td></tr>
+      <tr><td>Order Date</td><td style="text-align:right;">${escapeHtml(datePart)}</td></tr>
+      <tr><td>Order Time</td><td style="text-align:right;">${escapeHtml(timePart)}</td></tr>
+      ${amountRow}
+    </table>
+  `;
 }
 
 function invoiceTableHtml(order) {
@@ -144,9 +169,7 @@ function buildOrderStatusHtml(order, status) {
       <p>Hi ${name},</p>
       <p style="font-size: 16px; font-weight: bold;">Your order has been confirmed!</p>
       <p>Here's your invoice. We're getting your books ready now.</p>
-      <table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; color:#64748b;">
-        <tr><td>Order date</td><td style="text-align:right;">${escapeHtml(order.date)}</td></tr>
-      </table>
+      ${orderMetaTableHtml(order)}
       ${invoiceTableHtml(order)}
       <p style="font-size: 14px; background:#f1f5f9; padding: 12px; border-radius: 6px;">🚚 ${deliveryEstimateHtml(order)}</p>
     `);
@@ -157,6 +180,7 @@ function buildOrderStatusHtml(order, status) {
       <p>Hi ${name},</p>
       <p style="font-size: 16px; font-weight: bold;">We're sorry - your order has been canceled</p>
       <p>Unfortunately, one or more books in your order are currently out of stock, so we weren't able to fulfill it this time. We're sorry for the inconvenience.</p>
+      ${orderMetaTableHtml(order, { includeAmount: true })}
       <p style="color:#64748b; font-size: 13px;">Items from your order:</p>
       ${simpleItemListHtml(order)}
       <p style="text-align: center; margin: 24px 0;">
@@ -170,10 +194,7 @@ function buildOrderStatusHtml(order, status) {
     <p>Hi ${name},</p>
     <p style="font-size: 16px; font-weight: bold;">Your order has been delivered!</p>
     <p>Thanks for shopping with Book Ocean BD - we hope you enjoy your books.</p>
-    <table style="width: 100%; border-collapse: collapse; margin: 16px 0; font-size: 14px;">
-      <tr><td style="padding: 4px 0; color:#64748b;">Order date</td><td style="text-align:right;">${escapeHtml(order.date)}</td></tr>
-      <tr><td style="padding: 4px 0; color:#64748b;">Total</td><td style="text-align:right;">৳${order.totalAmount ?? ""}</td></tr>
-    </table>
+    ${orderMetaTableHtml(order, { includeAmount: true })}
     ${simpleItemListHtml(order)}
   `);
 }
