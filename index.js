@@ -479,14 +479,7 @@ async function run() {
         },
       };
       const result = await ordersCollection.updateOne(filter, updateDoc);
-      if (result.modifiedCount > 0) {
-        const order = await ordersCollection.findOne(filter);
-        try {
-          await sendOrderStatusEmail(order, "delivered");
-        } catch (err) {
-          console.error("Failed to send delivery email:", err);
-        }
-      }
+      // no email on delivery - only approve/cancel send a notification
       res.send(result);
     });
 

@@ -99,6 +99,18 @@ function deliveryEstimateHtml(order) {
   return "Delivery usually takes up to <strong>72 hours inside Dhaka</strong>, or <strong>3-4 days outside Dhaka</strong>.";
 }
 
+// A full Mongo ObjectId (24 hex chars) is not something a customer wants to
+// read in an email - derive a short 4-digit numeric reference instead.
+// Not guaranteed globally unique (1-in-10000 chance of collision between any
+// two orders), but it's just a display reference; support can always look an
+// order up by email/date, and the admin dashboard has the real _id.
+function shortInvoiceId(order) {
+  const hex = order._id?.toString();
+  if (!hex) return "----";
+  const num = BigInt("0x" + hex) % 10000n;
+  return num.toString().padStart(4, "0");
+}
+
 // order.date is stored as 'yyyy-MM-dd HH:mm:ss' (see Checkout.jsx) - split
 // into separate date/time for display rather than one blob string.
 function orderMetaTableHtml(order, { includeAmount = false } = {}) {
@@ -108,7 +120,7 @@ function orderMetaTableHtml(order, { includeAmount = false } = {}) {
     : "";
   return `
     <table style="width: 100%; border-collapse: collapse; margin: 12px 0; font-size: 13px; color:#64748b;">
-      <tr><td>Invoice ID</td><td style="text-align:right;">#${escapeHtml(order._id?.toString())}</td></tr>
+      <tr><td>Invoice ID</td><td style="text-align:right;">#${shortInvoiceId(order)}</td></tr>
       <tr><td>Order Date</td><td style="text-align:right;">${escapeHtml(datePart)}</td></tr>
       <tr><td>Order Time</td><td style="text-align:right;">${escapeHtml(timePart)}</td></tr>
       ${amountRow}
@@ -175,34 +187,25 @@ function buildOrderStatusHtml(order, status) {
     `);
   }
 
-  if (status === "canceled") {
-    return buildLayout(`
-      <p>Hi ${name},</p>
-      <p style="font-size: 16px; font-weight: bold;">We're sorry - your order has been canceled</p>
-      <p>Unfortunately, one or more books in your order are currently out of stock, so we weren't able to fulfill it this time. We're sorry for the inconvenience.</p>
-      ${orderMetaTableHtml(order, { includeAmount: true })}
-      <p style="color:#64748b; font-size: 13px;">Items from your order:</p>
-      ${simpleItemListHtml(order)}
-      <p style="text-align: center; margin: 24px 0;">
-        <a href="${BOOKS_URL}" style="background:#1e293b; color:#ffffff; text-decoration:none; padding:12px 28px; border-radius:6px; font-weight:bold; display:inline-block;">Browse Other Books</a>
-      </p>
-    `);
-  }
-
-  // delivered
+  // canceled
   return buildLayout(`
     <p>Hi ${name},</p>
-    <p style="font-size: 16px; font-weight: bold;">Your order has been delivered!</p>
-    <p>Thanks for shopping with Book Ocean BD - we hope you enjoy your books.</p>
+    <p style="font-size: 16px; font-weight: bold;">We're sorry - your order has been canceled</p>
+    <p>Unfortunately, one or more books in your order are currently out of stock, so we weren't able to fulfill it this time. We're sorry for the inconvenience.</p>
     ${orderMetaTableHtml(order, { includeAmount: true })}
+    <p style="color:#64748b; font-size: 13px;">Items from your order:</p>
     ${simpleItemListHtml(order)}
+    <p style="text-align: center; margin: 24px 0;">
+      <a href="${BOOKS_URL}" style="background:#1e293b; color:#ffffff; text-decoration:none; padding:12px 28px; border-radius:6px; font-weight:bold; display:inline-block;">Browse Other Books</a>
+    </p>
   `);
 }
 
+// no 'delivered' entry - no email is sent for that status (see index.js
+// /orders/delivery-order/:id)
 const SUBJECTS = {
   approve: "Your Book Ocean BD order is confirmed - invoice inside",
   canceled: "Your Book Ocean BD order has been canceled",
-  delivered: "Your Book Ocean BD order has been delivered",
 };
 
 function buildPasswordResetHtml(resetLink) {
@@ -218,7 +221,7 @@ function buildPasswordResetHtml(resetLink) {
 
 // order: the order document (must have .email, .data.name, .cart, .date,
 // .total, .deliveryCharge, .totalAmount, .data.area)
-// status: 'approve' | 'canceled' | 'delivered'
+// status: 'approve' | 'canceled' (no email is sent for 'delivered')
 async function sendOrderStatusEmail(order, status) {
   if (!isConfigured) return;
   if (!order?.email) {
