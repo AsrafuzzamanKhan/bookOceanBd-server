@@ -102,17 +102,32 @@ async function run() {
       res.send(result);
     });
 
-    // update own profile (name only) - self-service, any logged-in user can
-    // update their own record, matched by the email in their JWT (not the
-    // request body, so nobody can edit someone else's profile by id/email)
+    // get own profile - self-service, matched by the email in their JWT
+    app.get("/users/profile", verifyJWT, async (req, res) => {
+      const email = req.decoded.email;
+      const result = await usersCollection.findOne({ email });
+      res.send(result || {});
+    });
+
+    // update own profile (name/phone/address/gender) - self-service, any
+    // logged-in user can update their own record, matched by the email in
+    // their JWT (not the request body, so nobody can edit someone else's
+    // profile by id/email)
     app.patch("/users/profile", verifyJWT, async (req, res) => {
       const email = req.decoded.email;
-      const { name } = req.body;
+      const { name, phone, address, gender } = req.body;
       if (!name || !name.trim()) {
         return res.status(400).send({ error: true, message: "name is required" });
       }
       const filter = { email };
-      const updateDoc = { $set: { name: name.trim() } };
+      const updateDoc = {
+        $set: {
+          name: name.trim(),
+          phone: phone ?? "",
+          address: address ?? "",
+          gender: gender ?? "",
+        },
+      };
       const result = await usersCollection.updateOne(filter, updateDoc);
       res.send(result);
     });
