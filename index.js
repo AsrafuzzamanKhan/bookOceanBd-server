@@ -340,6 +340,11 @@ async function run() {
         },
       };
       if (hasQuantity) updatedBook.$set.quantity = quantity;
+      // image/thumbnail are optional on update - only overwrite them when a
+      // new one was actually uploaded, so leaving the file picker empty
+      // keeps the book's existing cover instead of wiping it out
+      if (bookInfo.image) updatedBook.$set.image = bookInfo.image;
+      if (bookInfo.thumbnail) updatedBook.$set.thumbnail = bookInfo.thumbnail;
       const result = await booksCollection.updateOne(
         filter,
         updatedBook,
