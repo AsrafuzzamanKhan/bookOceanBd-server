@@ -375,19 +375,50 @@ async function run() {
       res.send(result);
     });
 
-    // cart insart
+    // cart insart - adding a book that's already in this user's cart bumps
+    // its quantity (capped at current stock) instead of creating a second,
+    // duplicate line for the same book
     app.post("/carts", async (req, res) => {
       const item = req.body;
-      const query = { bookId: item.bookId };
+      const query = { bookId: item.bookId, email: item.email };
+      const existing = await cartCollection.findOne(query);
 
-      // check exixting
-      // const exixtingCartItem = await cartCollection.findOne(query);
-      // console.log("exixted", exixtingCartItem);
-      // if (exixtingCartItem) {
-      //   return res.send({ message: "Existed" });
-      // }
-      const result = await cartCollection.insertOne(item);
-      res.send(result);
+      const book = await booksCollection.findOne({ _id: new ObjectId(item.bookId) });
+      // if we can't verify stock for some reason, don't let quantity climb
+      const maxQty = book?.quantity ?? 1;
+
+      if (existing) {
+        const quantity = Math.min((existing.quantity || 1) + 1, Math.max(maxQty, 1));
+        const result = await cartCollection.updateOne(query, { $set: { quantity } });
+        return res.send({ ...result, existed: true, quantity, maxQty });
+      }
+
+      const result = await cartCollection.insertOne({ ...item, quantity: 1 });
+      res.send({ ...result, existed: false, quantity: 1, maxQty });
+    });
+
+    // update a cart item's quantity (the +/- stepper in the cart drawer) -
+    // always clamped to [1, book's current stock], and only the item's own
+    // owner can change it
+    app.patch("/carts/:id", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      const requestedQty = parseInt(req.body.quantity, 10);
+      if (!requestedQty || requestedQty < 1) {
+        return res.status(400).send({ error: true, message: "Invalid quantity" });
+      }
+
+      const cartItem = await cartCollection.findOne({ _id: new ObjectId(id) });
+      if (!cartItem) return res.status(404).send({ error: true, message: "Cart item not found" });
+      if (cartItem.email !== req.decoded.email) {
+        return res.status(403).send({ error: true, message: "Forbidden access" });
+      }
+
+      const book = await booksCollection.findOne({ _id: new ObjectId(cartItem.bookId) });
+      const maxQty = book?.quantity ?? 1;
+      const quantity = Math.max(1, Math.min(requestedQty, Math.max(maxQty, 1)));
+
+      const result = await cartCollection.updateOne({ _id: new ObjectId(id) }, { $set: { quantity } });
+      res.send({ ...result, quantity, maxQty });
     });
 
     // get cart by email
