@@ -281,6 +281,15 @@ async function run() {
     // post  books
     app.post("/books", verifyJWT, verifyAdmin, async (req, res) => {
       const query = req.body;
+      // quantity is the source of truth for stock - if it was sent, derive
+      // available from it instead of trusting a separately-submitted value
+      const hasQuantity = query.quantity !== undefined && query.quantity !== null && query.quantity !== "";
+      if (hasQuantity) {
+        query.quantity = Number(query.quantity);
+        query.available = query.quantity > 0 ? "true" : "false";
+      } else {
+        delete query.quantity;
+      }
       const result = await booksCollection.insertOne(query);
       res.send(result);
     });
@@ -300,6 +309,16 @@ async function run() {
       const filter = { _id: new ObjectId(id) };
       const bookInfo = req.body;
       const option = { upsert: true };
+      // quantity is the source of truth for stock - if it was sent, derive
+      // available from it instead of trusting a separately-submitted value.
+      // Only touches quantity in $set when actually provided, so an older
+      // cached client that doesn't send it can't null out a real count.
+      let available = bookInfo.available;
+      const hasQuantity = bookInfo.quantity !== undefined && bookInfo.quantity !== null && bookInfo.quantity !== "";
+      const quantity = hasQuantity ? Number(bookInfo.quantity) : undefined;
+      if (hasQuantity) {
+        available = quantity > 0 ? "true" : "false";
+      }
       const updatedBook = {
         $set: {
           name: bookInfo.name,
@@ -307,7 +326,7 @@ async function run() {
           category: bookInfo.category,
           price: bookInfo.price,
           cover: bookInfo.cover,
-          available: bookInfo.available,
+          available: available,
           new: bookInfo.new,
           best: bookInfo.best,
           description: bookInfo.description,
@@ -320,6 +339,7 @@ async function run() {
           publisher: bookInfo.publisher,
         },
       };
+      if (hasQuantity) updatedBook.$set.quantity = quantity;
       const result = await booksCollection.updateOne(
         filter,
         updatedBook,

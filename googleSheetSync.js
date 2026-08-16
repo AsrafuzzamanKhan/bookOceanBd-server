@@ -1,9 +1,10 @@
 // Syncs the book catalog from a public Google Sheet CSV export.
 //
-// Only pulls 5 fields, by design: name, author, category, availability,
-// price. Everything else on a book record (image, description, ISBN,
-// publisher, cover type, etc.) is left for manual editing via the normal
-// Add/Edit Book pages - the sheet doesn't have that data anyway.
+// Only pulls 5 fields, by design: name, author, category, quantity
+// (stock count) - from which availability is derived - and price.
+// Everything else on a book record (image, description, ISBN, publisher,
+// cover type, etc.) is left for manual editing via the normal Add/Edit
+// Book pages - the sheet doesn't have that data anyway.
 //
 // The sheet's actual columns are just: SN, BOOK NAME, AUTHOR NAME, STOCK,
 // PRICE(TK). Category isn't a column either - it's implied by
@@ -11,11 +12,13 @@
 // Collection"), which we track as we walk through the rows.
 //
 // Behavior (see conversation for why):
-//   - Existing book (matched by name+author, case-insensitive): only price
-//     and availability are updated. Nothing else is touched.
+//   - Existing book (matched by name+author, case-insensitive): only
+//     price, quantity, and availability (derived: quantity > 0) are
+//     updated. Nothing else is touched.
 //   - Book not found in the catalog: created with name/author/category/
-//     price/availability from the sheet, a placeholder cover image, and
-//     needsCoverImage: true so it's easy to find and finish manually later.
+//     price/quantity/availability from the sheet, a placeholder cover
+//     image, and needsCoverImage: true so it's easy to find and finish
+//     manually later.
 //
 // Uses one query to load all existing {name, author} pairs into memory and
 // a single bulkWrite for every insert/update, instead of one round trip per
@@ -144,6 +147,7 @@ function parseBookRows(rows) {
       author: (author || "").trim() || "Unknown",
       category: currentCategory,
       price: parsePrice(price),
+      quantity: stockCount,
       available: stockCount > 0 ? "true" : "false",
     });
   }
@@ -174,7 +178,7 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
     const existingId = existingMap.get(key);
 
     if (existingId) {
-      const setFields = { available: book.available };
+      const setFields = { available: book.available, quantity: book.quantity };
       if (book.price != null) setFields.price = book.price;
       bulkOps.push({ updateOne: { filter: { _id: existingId }, update: { $set: setFields } } });
       updated++;
@@ -184,6 +188,7 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
         author: book.author,
         category: book.category,
         price: book.price || 0,
+        quantity: book.quantity,
         available: book.available,
         image: PLACEHOLDER_IMAGE,
         thumbnail: PLACEHOLDER_IMAGE,
