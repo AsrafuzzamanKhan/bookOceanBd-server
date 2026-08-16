@@ -12,5 +12,11 @@
       "dest": "/",
       "methods":["GET","POST","DELETE","PUT","PATCH","OPTIONS"]
     }
+  ],
+  "crons": [
+    {
+      "path": "/cron/sync-google-sheet",
+      "schedule": "0 18 * * *"
+    }
   ]
 }

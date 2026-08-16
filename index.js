@@ -6,6 +6,9 @@ const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const { initFirebaseAdminLite } = require("./firebaseAdminLite");
 const { sendOrderStatusEmail, sendNewOrderAdminEmail, sendPasswordResetEmail, sendVerificationEmail } = require("./mailer");
+const { syncGoogleSheet } = require("./googleSheetSync");
+
+const BOOK_SHEET_URL = "https://docs.google.com/spreadsheets/d/1oJMLhYZrA4Rjiot65zuR75ZmTVrVqQmYDxUNwtNS3U4/edit?gid=0";
 
 // Used to generate password reset links server-side so we can email them
 // ourselves (branded, via mailer.js) instead of relying on Firebase's own
@@ -556,6 +559,37 @@ async function run() {
         orders,
         revenue,
       });
+    });
+
+    // manual trigger - admin dashboard's "Sync Now" button
+    app.post("/admin/sync-google-sheet", verifyJWT, verifyAdmin, async (req, res) => {
+      try {
+        const result = await syncGoogleSheet(booksCollection, BOOK_SHEET_URL, { dryRun: !!req.body?.dryRun });
+        res.send(result);
+      } catch (err) {
+        console.error("[sync-google-sheet] failed:", err);
+        res.status(500).send({ error: true, message: err.message });
+      }
+    });
+
+    // automatic trigger - called by Vercel Cron (see vercel.json). Not
+    // admin-JWT protected since Vercel's scheduler doesn't carry a user
+    // session; instead it must present the shared CRON_SECRET. No-ops
+    // (403) for anyone else, so the sheet can't be synced by just knowing
+    // this URL.
+    app.get("/cron/sync-google-sheet", async (req, res) => {
+      const authHeader = req.headers.authorization;
+      if (!process.env.CRON_SECRET || authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+        return res.status(403).send({ error: true, message: "forbidden" });
+      }
+      try {
+        const result = await syncGoogleSheet(booksCollection, BOOK_SHEET_URL);
+        console.log("[cron sync-google-sheet]", result.totalRows, "rows,", result.updated, "updated,", result.created, "created");
+        res.send(result);
+      } catch (err) {
+        console.error("[cron sync-google-sheet] failed:", err);
+        res.status(500).send({ error: true, message: err.message });
+      }
     });
 
     // order stats
