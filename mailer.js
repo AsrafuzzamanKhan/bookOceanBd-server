@@ -322,4 +322,4 @@ async function sendVerificationEmail(toEmail, verifyLink) {
   });
 }
 
-module.exports = { sendOrderStatusEmail, sendNewOrderAdminEmail, sendPasswordResetEmail, sendVerificationEmail };
+module.exports = { sendOrderStatusEmail, sendNewOrderAdminEmail, sendPasswordResetEmail, sendVerificationEmail, shortInvoiceId };

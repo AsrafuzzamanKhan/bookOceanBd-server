@@ -5,8 +5,8 @@ const { ObjectId, MongoClient, ServerApiVersion} = require("mongodb");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const { initFirebaseAdminLite } = require("./firebaseAdminLite");
-const { sendOrderStatusEmail, sendNewOrderAdminEmail, sendPasswordResetEmail, sendVerificationEmail } = require("./mailer");
-const { syncGoogleSheet } = require("./googleSheetSync");
+const { sendOrderStatusEmail, sendNewOrderAdminEmail, sendPasswordResetEmail, sendVerificationEmail, shortInvoiceId } = require("./mailer");
+const { syncGoogleSheet, LOW_STOCK_THRESHOLD } = require("./googleSheetSync");
 
 const BOOK_SHEET_URL = "https://docs.google.com/spreadsheets/d/1oJMLhYZrA4Rjiot65zuR75ZmTVrVqQmYDxUNwtNS3U4/edit?gid=0";
 
@@ -97,6 +97,45 @@ async function run() {
     const cartCollection = client.db("bookOceanBdDB").collection("carts");
     const ordersCollection = client.db("bookOceanBdDB").collection("orders");
     const reviewsCollection = client.db("bookOceanBdDB").collection("reviews");
+    const notificationsCollection = client.db("bookOceanBdDB").collection("notifications");
+
+    // creates an in-app notification for the navbar bell (see GET /notifications
+    // below). Best-effort - a failed insert must never fail the order-status
+    // update (or book edit, or sheet sync) that triggered it, so callers
+    // don't need to await/catch this. `link` is where the bell's dropdown
+    // sends the user when they click the notification (e.g. an admin's "new
+    // order" notification links to /dashboard/allOrders, a shopper's "order
+    // approved" links to /dashboard/orderHistory).
+    const createNotification = async ({ email, title, message, type, link }) => {
+      if (!email) return;
+      try {
+        await notificationsCollection.insertOne({
+          email,
+          title,
+          message,
+          type,
+          link,
+          read: false,
+          createdAt: new Date(),
+        });
+      } catch (err) {
+        console.error(`Failed to create notification (${type}) for ${email}:`, err);
+      }
+    };
+
+    // fans a notification out to every admin - used for events admins need
+    // to act on (new order) or just be aware of (low stock), as opposed to
+    // the per-customer notifications above which target a single email.
+    const notifyAdmins = async ({ title, message, type, link }) => {
+      try {
+        const admins = await usersCollection.find({ role: "admin" }, { projection: { email: 1 } }).toArray();
+        await Promise.all(
+          admins.map((admin) => createNotification({ email: admin.email, title, message, type, link }))
+        );
+      } catch (err) {
+        console.error(`Failed to notify admins (${type}):`, err);
+      }
+    };
 
     // jwt
     // const age = 1000 * 60 * 60 * 24 * 7;
@@ -291,6 +330,19 @@ async function run() {
         delete query.quantity;
       }
       const result = await booksCollection.insertOne(query);
+      // a book can be added already low/out of stock (e.g. only 2 copies in
+      // hand) - worth flagging once immediately, no "previous" value needed
+      // since this is the book's first-ever quantity
+      if (hasQuantity && query.quantity <= LOW_STOCK_THRESHOLD) {
+        await notifyAdmins({
+          title: query.quantity === 0 ? "Book added out of stock" : "New book low on stock",
+          message: query.quantity === 0
+            ? `"${query.name}" was added with 0 in stock.`
+            : `"${query.name}" was added with only ${query.quantity} in stock.`,
+          type: query.quantity === 0 ? "book_out_of_stock" : "book_low_stock",
+          link: `/dashboard/updateBook/${result.insertedId}`,
+        });
+      }
       res.send(result);
     });
 
@@ -319,6 +371,12 @@ async function run() {
       if (hasQuantity) {
         available = quantity > 0 ? "true" : "false";
       }
+      // fetched before the update so we can tell whether this edit just
+      // crossed the low-stock line, rather than notifying on every save of
+      // an already-low book
+      const previousBook = hasQuantity
+        ? await booksCollection.findOne(filter, { projection: { quantity: 1, name: 1 } })
+        : null;
       const updatedBook = {
         $set: {
           name: bookInfo.name,
@@ -350,6 +408,21 @@ async function run() {
         updatedBook,
         option
       );
+      if (hasQuantity && previousBook) {
+        const wasLow = typeof previousBook.quantity === "number" && previousBook.quantity <= LOW_STOCK_THRESHOLD;
+        const isLow = quantity <= LOW_STOCK_THRESHOLD;
+        if (isLow && !wasLow) {
+          const bookName = bookInfo.name || previousBook.name;
+          await notifyAdmins({
+            title: quantity === 0 ? "Book out of stock" : "Book low on stock",
+            message: quantity === 0
+              ? `"${bookName}" is now out of stock.`
+              : `"${bookName}" has only ${quantity} left in stock.`,
+            type: quantity === 0 ? "book_out_of_stock" : "book_low_stock",
+            link: `/dashboard/updateBook/${id}`,
+          });
+        }
+      }
       res.send(result);
     });
 
@@ -498,6 +571,23 @@ async function run() {
         console.error("Failed to send new-order admin email:", err);
       }
 
+      const placedOrder = { ...orders, _id: insertResult.insertedId };
+      await createNotification({
+        email: orders.email,
+        title: "Order placed",
+        message: `Your order #${shortInvoiceId(placedOrder)} has been received and is awaiting confirmation.`,
+        type: "order_placed",
+        link: "/dashboard/orderHistory",
+      });
+      // same event as the admin email above, but in-app so it shows up as an
+      // unread badge on the bell instead of relying on admins checking inbox
+      await notifyAdmins({
+        title: "New order received",
+        message: `Order #${shortInvoiceId(placedOrder)} needs your review.`,
+        type: "admin_new_order",
+        link: "/dashboard/allOrders",
+      });
+
       res.send({ insertResult, deleteResult });
     });
     // get allorder
@@ -545,6 +635,13 @@ async function run() {
         } catch (err) {
           console.error("Failed to send approval email:", err);
         }
+        await createNotification({
+          email: order.email,
+          title: "Order approved",
+          message: `Your order #${shortInvoiceId(order)} has been approved and is being prepared.`,
+          type: "order_approved",
+          link: "/dashboard/orderHistory",
+        });
       }
       res.send(result);
     });
@@ -566,6 +663,13 @@ async function run() {
         } catch (err) {
           console.error("Failed to send cancellation email:", err);
         }
+        await createNotification({
+          email: order.email,
+          title: "Order canceled",
+          message: `Your order #${shortInvoiceId(order)} has been canceled.`,
+          type: "order_canceled",
+          link: "/dashboard/orderHistory",
+        });
       }
       res.send(result);
     });
@@ -580,7 +684,55 @@ async function run() {
         },
       };
       const result = await ordersCollection.updateOne(filter, updateDoc);
-      // no email on delivery - only approve/cancel send a notification
+      // no email on delivery (see mailer.js SUBJECTS) - but it still gets an
+      // in-app notification like approve/cancel do.
+      if (result.modifiedCount > 0) {
+        const order = await ordersCollection.findOne(filter);
+        await createNotification({
+          email: order.email,
+          title: "Order delivered",
+          message: `Your order #${shortInvoiceId(order)} has been delivered. Enjoy your books!`,
+          type: "order_delivered",
+          link: "/dashboard/orderHistory",
+        });
+      }
+      res.send(result);
+    });
+
+    // get the logged-in user's notifications for the navbar bell, newest first
+    app.get("/notifications", verifyJWT, async (req, res) => {
+      const email = req.query.email;
+      if (!email) {
+        return res.send([]);
+      }
+      if (email !== req.decoded.email) {
+        return res.status(403).send({ error: true, message: "Forbidden access" });
+      }
+      const result = await notificationsCollection
+        .find({ email })
+        .sort({ createdAt: -1 })
+        .limit(30)
+        .toArray();
+      res.send(result);
+    });
+
+    // mark a single notification as read (filtering by email too, not just
+    // _id, so a user can't mark another user's notification as read)
+    app.patch("/notifications/:id/read", verifyJWT, async (req, res) => {
+      const id = req.params.id;
+      const result = await notificationsCollection.updateOne(
+        { _id: new ObjectId(id), email: req.decoded.email },
+        { $set: { read: true } }
+      );
+      res.send(result);
+    });
+
+    // mark all of the logged-in user's notifications as read
+    app.patch("/notifications/mark-all-read", verifyJWT, async (req, res) => {
+      const result = await notificationsCollection.updateMany(
+        { email: req.decoded.email, read: false },
+        { $set: { read: true } }
+      );
       res.send(result);
     });
 
@@ -618,9 +770,30 @@ async function run() {
     });
 
     // manual trigger - admin dashboard's "Sync Now" button
+    // turns syncGoogleSheet's lowStockAlerts (books that just crossed into
+    // low/out-of-stock as a result of this sync) into admin notifications.
+    // Shared by both sync routes below; a no-op for dryRun since nothing
+    // actually changed in that case.
+    const notifyLowStockAlerts = async (alerts) => {
+      await Promise.all(
+        (alerts || []).map(({ id, name, quantity }) =>
+          notifyAdmins({
+            title: quantity === 0 ? "Book out of stock" : "Book low on stock",
+            message: quantity === 0
+              ? `"${name}" is now out of stock (synced from the stock sheet).`
+              : `"${name}" has only ${quantity} left in stock (synced from the stock sheet).`,
+            type: quantity === 0 ? "book_out_of_stock" : "book_low_stock",
+            link: `/dashboard/updateBook/${id}`,
+          })
+        )
+      );
+    };
+
     app.post("/admin/sync-google-sheet", verifyJWT, verifyAdmin, async (req, res) => {
       try {
-        const result = await syncGoogleSheet(booksCollection, BOOK_SHEET_URL, { dryRun: !!req.body?.dryRun });
+        const dryRun = !!req.body?.dryRun;
+        const result = await syncGoogleSheet(booksCollection, BOOK_SHEET_URL, { dryRun });
+        if (!dryRun) await notifyLowStockAlerts(result.lowStockAlerts);
         res.send(result);
       } catch (err) {
         console.error("[sync-google-sheet] failed:", err);
@@ -641,6 +814,7 @@ async function run() {
       try {
         const result = await syncGoogleSheet(booksCollection, BOOK_SHEET_URL);
         console.log("[cron sync-google-sheet]", result.totalRows, "rows,", result.updated, "updated,", result.created, "created");
+        await notifyLowStockAlerts(result.lowStockAlerts);
         res.send(result);
       } catch (err) {
         console.error("[cron sync-google-sheet] failed:", err);

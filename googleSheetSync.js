@@ -26,6 +26,11 @@
 
 const Papa = require("papaparse");
 
+// Matches the "Only X left in stock" threshold BookDetails.jsx already shows
+// shoppers - reused here so a stock drop triggers an admin notification at
+// the same point a customer would start seeing the low-stock warning.
+const LOW_STOCK_THRESHOLD = 5;
+
 // Section-header text (normalized: collapsed whitespace, lowercased) ->
 // this app's actual category values (see AddBooks.jsx's category <select>).
 // "" is the bucket for rows before the first section header in the sheet.
@@ -160,14 +165,15 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
   const rows = await fetchSheetRows(sheetUrlOrId);
   const parsedBooks = parseBookRows(rows);
 
-  const existingBooks = await booksCollection.find({}, { projection: { name: 1, author: 1 } }).toArray();
+  const existingBooks = await booksCollection.find({}, { projection: { name: 1, author: 1, quantity: 1 } }).toArray();
   const existingMap = new Map();
   for (const b of existingBooks) {
-    existingMap.set(matchKey(b.name, b.author), b._id);
+    existingMap.set(matchKey(b.name, b.author), { id: b._id, quantity: b.quantity });
   }
 
   const bulkOps = [];
   const newlyCreated = [];
+  const lowStockAlerts = [];
   const categoryCounts = {};
   let updated = 0;
   let created = 0;
@@ -175,13 +181,22 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
   for (const book of parsedBooks) {
     categoryCounts[book.category] = (categoryCounts[book.category] || 0) + 1;
     const key = matchKey(book.name, book.author);
-    const existingId = existingMap.get(key);
+    const existing = existingMap.get(key);
 
-    if (existingId) {
+    if (existing) {
       const setFields = { available: book.available, quantity: book.quantity };
       if (book.price != null) setFields.price = book.price;
-      bulkOps.push({ updateOne: { filter: { _id: existingId }, update: { $set: setFields } } });
+      bulkOps.push({ updateOne: { filter: { _id: existing.id }, update: { $set: setFields } } });
       updated++;
+
+      // only alert on the crossing (was above the line, now at/below it) -
+      // not on every sync that re-confirms an already-low count, so admins
+      // get one notification per book per stock dip instead of one per cron run
+      const wasLow = typeof existing.quantity === "number" && existing.quantity <= LOW_STOCK_THRESHOLD;
+      const isLow = book.quantity <= LOW_STOCK_THRESHOLD;
+      if (isLow && !wasLow) {
+        lowStockAlerts.push({ id: existing.id, name: book.name, quantity: book.quantity });
+      }
     } else {
       const newBookDoc = {
         name: book.name,
@@ -225,7 +240,8 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
     created,
     categoryCounts,
     newlyCreated: dryRun ? newlyCreated : newlyCreated.slice(0, 200), // cap response size
+    lowStockAlerts, // caller (index.js) turns these into admin notifications
   };
 }
 
-module.exports = { syncGoogleSheet, fetchSheetRows, parseBookRows };
+module.exports = { syncGoogleSheet, fetchSheetRows, parseBookRows, LOW_STOCK_THRESHOLD };
