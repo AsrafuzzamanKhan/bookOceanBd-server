@@ -304,8 +304,11 @@ async function run() {
       const result = { admin: user?.role === "admin" };
       res.send(result);
     });
-    // delete user
-    app.delete("/users/:id", verifyJWT, async (req, res) => {
+    // delete user - was verifyJWT only (any logged-in user, not just an
+    // admin, could delete any other account by calling this directly - the
+    // AllUsers.jsx page is admin-gated in the UI, but the API itself wasn't).
+    // verifyAdmin matches every other admin-only mutation in this file.
+    app.delete("/users/:id", verifyJWT, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
       const result = await usersCollection.deleteOne(query);
