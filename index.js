@@ -224,16 +224,24 @@ async function run() {
       next();
     };
 
-    // create users api
+    // create user record - public/unauthenticated by design (called right
+    // after signup, before this app's own JWT necessarily exists yet).
+    // BUT: was inserting req.body verbatim, so anyone could POST
+    // { email, role: "admin" } directly (bypassing the frontend entirely)
+    // and grant themselves admin on a brand-new account. Whitelisted to
+    // only the fields signup actually needs - role can never come from
+    // the client; every new account starts as a regular user, promoted
+    // only via PATCH /users/admin/:id (verifyAdmin-protected).
     app.post("/users", async (req, res) => {
-      const user = req.body;
-      const query = { email: user.email };
-      const exixtingUser = await usersCollection.findOne(query);
-      console.log("exixting user ", exixtingUser);
-      if (exixtingUser) {
+      const { name, email, photoURL } = req.body;
+      if (!email) {
+        return res.status(400).send({ error: true, message: "email is required" });
+      }
+      const existingUser = await usersCollection.findOne({ email });
+      if (existingUser) {
         return res.send({ message: "User All ready exist" });
       }
-      const result = await usersCollection.insertOne(user);
+      const result = await usersCollection.insertOne({ name, email, photoURL });
       res.send(result);
     });
 
@@ -453,9 +461,13 @@ async function run() {
 
     // cart insart - adding a book that's already in this user's cart bumps
     // its quantity (capped at current stock) instead of creating a second,
-    // duplicate line for the same book
-    app.post("/carts", async (req, res) => {
-      const item = req.body;
+    // duplicate line for the same book. Was unauthenticated with `email`
+    // taken straight from the request body - anyone could POST a cart item
+    // claiming to be any other customer's email, polluting their cart. Now
+    // requires login and the item is always filed under the caller's own
+    // email, ignoring whatever the client sent.
+    app.post("/carts", verifyJWT, async (req, res) => {
+      const item = { ...req.body, email: req.decoded.email };
       const query = { bookId: item.bookId, email: item.email };
       const existing = await cartCollection.findOne(query);
 
@@ -515,11 +527,18 @@ async function run() {
       const result = await cartCollection.find(query).toArray();
       res.send(result);
     });
-    // delete cart
-    app.delete("/carts/:id", async (req, res) => {
+    // delete cart item - was unauthenticated with no ownership check at all
+    // (PATCH /carts/:id right above already does this correctly - this one
+    // just never got the same treatment). Anyone could delete any other
+    // customer's cart line by guessing its _id.
+    app.delete("/carts/:id", verifyJWT, async (req, res) => {
       const id = req.params.id;
-      const query = { _id: new ObjectId(id) };
-      const result = await cartCollection.deleteOne(query);
+      const cartItem = await cartCollection.findOne({ _id: new ObjectId(id) });
+      if (!cartItem) return res.status(404).send({ error: true, message: "Cart item not found" });
+      if (cartItem.email !== req.decoded.email) {
+        return res.status(403).send({ error: true, message: "Forbidden access" });
+      }
+      const result = await cartCollection.deleteOne({ _id: new ObjectId(id) });
       res.send(result);
     });
 
@@ -553,8 +572,13 @@ async function run() {
 
     // payment collection
 
+    // was inserting req.body.email verbatim - anyone logged in could place
+    // an order "as" another customer's email (fraudulent order attributed
+    // to a stranger, notification spam to their inbox, shows up in their
+    // Order History). Forced to the caller's own email, same fix as the
+    // cart-spoofing issue above.
     app.post("/orders", verifyJWT, async (req, res) => {
-      const orders = req.body;
+      const orders = { ...req.body, email: req.decoded.email };
       const insertResult = await ordersCollection.insertOne(orders);
 
       const query = {
@@ -593,8 +617,11 @@ async function run() {
 
       res.send({ insertResult, deleteResult });
     });
-    // get allorder
-    app.get("/allOrders", async (req, res) => {
+    // get all orders (admin) - was completely unauthenticated: every
+    // customer's name/phone/address/email and full order history was
+    // fetchable by anyone on the internet with a single GET request, no
+    // login required at all.
+    app.get("/allOrders", verifyJWT, verifyAdmin, async (req, res) => {
       const result = await ordersCollection.find().toArray();
       res.send(result);
     });
@@ -617,8 +644,10 @@ async function run() {
       const result = await ordersCollection.find(query).toArray();
       res.send(result);
     });
-    // order approve
-    app.patch("/orders/approve-order/:id", verifyJWT, async (req, res) => {
+    // order approve - admin-only in the AllOrders.jsx UI, but that was never
+    // enforced here: any logged-in customer could approve/cancel/deliver
+    // *anyone's* order by calling these three endpoints directly.
+    app.patch("/orders/approve-order/:id", verifyJWT, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       console.log(id);
       const filter = { _id: new ObjectId(id) };
@@ -648,8 +677,8 @@ async function run() {
       }
       res.send(result);
     });
-    // order cancel
-    app.patch("/orders/cancel-order/:id", verifyJWT, async (req, res) => {
+    // order cancel (admin) - see the note on approve-order above
+    app.patch("/orders/cancel-order/:id", verifyJWT, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       console.log(id);
       const filter = { _id: new ObjectId(id) };
@@ -676,8 +705,8 @@ async function run() {
       }
       res.send(result);
     });
-    // order delivery
-    app.patch("/orders/delivery-order/:id", verifyJWT, async (req, res) => {
+    // order delivery (admin) - see the note on approve-order above
+    app.patch("/orders/delivery-order/:id", verifyJWT, verifyAdmin, async (req, res) => {
       const id = req.params.id;
       console.log(id);
       const filter = { _id: new ObjectId(id) };
@@ -739,11 +768,27 @@ async function run() {
       res.send(result);
     });
 
-    // order cancel
-    // delete cart
-    app.delete("/orders/:id", async (req, res) => {
+    // customer self-cancel of their own pending order (OrderHistory.jsx's
+    // "Cancel order" button - deletes the record entirely, matching that
+    // page's "Removed from History" confirmation copy, as opposed to the
+    // admin PATCH /orders/cancel-order/:id above, which soft-cancels and
+    // keeps the record). Was completely unauthenticated - anyone who knew
+    // or guessed an order's _id could delete ANY order for ANY customer,
+    // regardless of status. Now requires the order to belong to the caller
+    // and still be pending.
+    app.delete("/orders/:id", verifyJWT, async (req, res) => {
       const id = req.params.id;
       const query = { _id: new ObjectId(id) };
+      const order = await ordersCollection.findOne(query);
+      if (!order) {
+        return res.status(404).send({ error: true, message: "Order not found" });
+      }
+      if (order.email !== req.decoded.email) {
+        return res.status(403).send({ error: true, message: "Forbidden access" });
+      }
+      if (order.status !== "pending") {
+        return res.status(400).send({ error: true, message: "Only a pending order can be canceled this way" });
+      }
       const result = await ordersCollection.deleteOne(query);
       res.send(result);
     });
