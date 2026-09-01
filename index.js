@@ -324,8 +324,30 @@ async function run() {
     });
 
     // books
+    //
+    // Excludes `description` - it's the largest field on every document and
+    // isn't used anywhere this listing feeds (book cards, search, category
+    // pages, cart) - only the individual book detail page needs it, which
+    // now fetches it separately via GET /books/:id below. Returning it here
+    // meant every single page load pulled ~2000 documents' worth of
+    // description text just to render book cards that never display it,
+    // which is what made this route slow enough to exceed the server's
+    // request timeout under real traffic.
     app.get("/books", async (req, res) => {
-      const result = await booksCollection.find().toArray();
+      const result = await booksCollection.find({}, { projection: { description: 0 } }).toArray();
+      res.send(result);
+    });
+    // single book, WITH description - used by the book detail page and the
+    // admin edit-book page, the only two places that actually need it
+    app.get("/books/:id", async (req, res) => {
+      const id = req.params.id;
+      if (!ObjectId.isValid(id)) {
+        return res.status(400).send({ error: true, message: "invalid id" });
+      }
+      const result = await booksCollection.findOne({ _id: new ObjectId(id) });
+      if (!result) {
+        return res.status(404).send({ error: true, message: "book not found" });
+      }
       res.send(result);
     });
     // post  books
