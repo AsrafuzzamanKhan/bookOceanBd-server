@@ -82,8 +82,56 @@ function normalizeForMatch(text) {
   return normalize((text || "").replace(/\([^)]*\)/g, ""));
 }
 
-function matchKey(name, author) {
-  return `${normalizeForMatch(name)}|${normalize(author)}`;
+// Book NAME is the primary match key (see syncGoogleSheet below) - author is
+// only used as a secondary check, to tell apart genuinely different books
+// that happen to share a generic title ("Selected Poems" by half a dozen
+// different poets is a real, confirmed case in this catalog) from sheet
+// rows that are actually the same book with the author typed slightly
+// differently ("HD CARLTON" vs "H.D carlton", "Art Spieglman" vs "Art
+// Spiegelman"). A plain exact-string comparison catches neither of those -
+// this strips ALL punctuation/spacing first, then tolerates a small typo
+// via edit distance, so formatting differences and minor misspellings both
+// resolve to "the same author" while genuinely different names don't.
+function normalizeAuthorKey(author) {
+  return normalize(author).replace(/[^a-z0-9]/g, "");
+}
+
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  let prev = Array.from({ length: n + 1 }, (_, j) => j);
+  for (let i = 1; i <= m; i++) {
+    const curr = [i];
+    for (let j = 1; j <= n; j++) {
+      curr[j] = a[i - 1] === b[j - 1]
+        ? prev[j - 1]
+        : 1 + Math.min(prev[j - 1], prev[j], curr[j - 1]);
+    }
+    prev = curr;
+  }
+  return prev[n];
+}
+
+// true if these two author strings plausibly refer to the same person -
+// used to decide whether a sheet row updates an existing same-named book or
+// creates a new one. An empty/"Unknown" side never blocks a match (a sheet
+// row with no author shouldn't spawn a duplicate of a book that already has
+// one on file).
+function authorsMatch(a, b) {
+  const na = normalizeAuthorKey(a);
+  const nb = normalizeAuthorKey(b);
+  if (!na || !nb || na === "unknown" || nb === "unknown") return true;
+  if (na === nb) return true;
+  // one name is a truncated/partial version of the other, e.g. "Gabriel
+  // Garcia" vs "Gabriel Garcia Marquez" - require some length so short
+  // names ("Lee" vs "Lee Child") don't false-positive against each other
+  if (na.length >= 6 && nb.length >= 6 && (na.startsWith(nb) || nb.startsWith(na))) return true;
+  // small edit distance relative to length - catches a handful of
+  // misspelled/mistyped letters without conflating unrelated names
+  const maxLen = Math.max(na.length, nb.length);
+  if (maxLen >= 6 && levenshtein(na, nb) <= 2) return true;
+  return false;
 }
 
 // Only name/author/category/availability/price come from the sheet - cover
@@ -165,10 +213,15 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
   const rows = await fetchSheetRows(sheetUrlOrId);
   const parsedBooks = parseBookRows(rows);
 
+  // grouped by NAME (the primary key) - each name maps to the list of
+  // existing catalog entries with that title, since more than one is
+  // legitimate (different authors' "Selected Poems", etc.)
   const existingBooks = await booksCollection.find({}, { projection: { name: 1, author: 1, quantity: 1 } }).toArray();
-  const existingMap = new Map();
+  const byName = new Map();
   for (const b of existingBooks) {
-    existingMap.set(matchKey(b.name, b.author), { id: b._id, quantity: b.quantity });
+    const key = normalizeForMatch(b.name);
+    if (!byName.has(key)) byName.set(key, []);
+    byName.get(key).push({ id: b._id, author: b.author, quantity: b.quantity });
   }
 
   const bulkOps = [];
@@ -180,10 +233,15 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
 
   for (const book of parsedBooks) {
     categoryCounts[book.category] = (categoryCounts[book.category] || 0) + 1;
-    const key = matchKey(book.name, book.author);
-    const existing = existingMap.get(key);
+    const nameKey = normalizeForMatch(book.name);
+    const candidates = byName.get(nameKey) || [];
+    const existing = candidates.find((c) => authorsMatch(c.author, book.author));
 
-    if (existing) {
+    if (existing && existing.id === null) {
+      // matches a row already created earlier in THIS SAME run (a
+      // duplicated row in the sheet itself) - nothing new to write, and
+      // there's no real _id yet to update against
+    } else if (existing) {
       const setFields = { available: book.available, quantity: book.quantity };
       if (book.price != null) setFields.price = book.price;
       bulkOps.push({ updateOne: { filter: { _id: existing.id }, update: { $set: setFields } } });
@@ -224,8 +282,11 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
       newlyCreated.push({ name: book.name, author: book.author, category: book.category, price: book.price });
       created++;
       // dedupe within this same run - a duplicated row in the sheet
-      // shouldn't create the same book twice
-      existingMap.set(key, true);
+      // shouldn't create the same book twice (no real _id yet since this
+      // hasn't been written; later rows just need this candidate to exist
+      // for the authorsMatch check, not a real id to update against)
+      if (!byName.has(nameKey)) byName.set(nameKey, []);
+      byName.get(nameKey).push({ id: null, author: book.author, quantity: book.quantity });
     }
   }
 
@@ -244,4 +305,11 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
   };
 }
 
-module.exports = { syncGoogleSheet, fetchSheetRows, parseBookRows, LOW_STOCK_THRESHOLD };
+module.exports = {
+  syncGoogleSheet,
+  fetchSheetRows,
+  parseBookRows,
+  LOW_STOCK_THRESHOLD,
+  normalizeForMatch,
+  authorsMatch,
+};

@@ -437,6 +437,23 @@ async function run() {
       res.send(result);
     });
 
+    // Quick in-stock/out-of-stock toggle from the Manage Books list, deliberately
+    // separate from the full PUT above - that endpoint $sets every field from
+    // req.body unconditionally, so sending just {available} through it would
+    // wipe out the book's name/author/category/etc with undefined. This only
+    // ever touches `available`, and never quantity - a manual override, not a
+    // restock/sell-out event (the next Google Sheet sync still derives
+    // availability from quantity as usual and will override this if it disagrees).
+    app.patch("/books/availability/:id", verifyJWT, verifyAdmin, async (req, res) => {
+      const id = req.params.id;
+      const available = req.body.available === "true" ? "true" : "false";
+      const result = await booksCollection.updateOne(
+        { _id: new ObjectId(id) },
+        { $set: { available } }
+      );
+      res.send(result);
+    });
+
     // banner
     app.get("/banners", async (req, res) => {
       const result = await bannersCollection.find().toArray();
