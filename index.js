@@ -325,16 +325,27 @@ async function run() {
 
     // books
     //
-    // Excludes `description` - it's the largest field on every document and
-    // isn't used anywhere this listing feeds (book cards, search, category
-    // pages, cart) - only the individual book detail page needs it, which
-    // now fetches it separately via GET /books/:id below. Returning it here
-    // meant every single page load pulled ~2000 documents' worth of
-    // description text just to render book cards that never display it,
-    // which is what made this route slow enough to exceed the server's
-    // request timeout under real traffic.
+    // TEMPORARY STOPGAP (as of the 2026-09-02 outage): capped at 600 and
+    // trimmed to only the fields list views actually use. The underlying
+    // problem is that this MongoDB cluster is on Atlas's free M0 tier,
+    // which throttles hard enough that even a lean, capped read of this
+    // collection takes several seconds - full descriptions for all ~2000
+    // books was pushing every single page load past Vercel's request
+    // timeout and taking the whole site down. Once the cluster is upgraded
+    // off M0, both the projection and the .limit(600) below should be
+    // revisited - the projection can likely stay (no real reason to ship
+    // description/isbn/etc to a book-card grid that never shows them), but
+    // the limit should go so the full catalog shows in listings/search
+    // again. GET /books/:id below is NOT capped or limited - every book is
+    // still fully reachable by direct link/id regardless of this.
     app.get("/books", async (req, res) => {
-      const result = await booksCollection.find({}, { projection: { description: 0 } }).toArray();
+      const result = await booksCollection
+        .find({}, { projection: {
+          name: 1, author: 1, price: 1, image: 1, thumbnail: 1, available: 1,
+          newBook: 1, category: 1, cover: 1, quantity: 1, best: 1, itemWeight: 1,
+        } })
+        .limit(600)
+        .toArray();
       res.send(result);
     });
     // single book, WITH description - used by the book detail page and the
