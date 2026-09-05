@@ -429,7 +429,11 @@ async function run() {
           price: bookInfo.price,
           cover: bookInfo.cover,
           available: available,
-          new: bookInfo.new,
+          // the schema's actual field is "newBook" (see GET /books'
+          // projection and the sync's newBookDoc) - this used to write a
+          // stray "new" field instead, so the "New" badge toggle on the
+          // admin edit form never actually persisted
+          newBook: bookInfo.newBook,
           best: bookInfo.best,
           description: bookInfo.description,
           dimensions: bookInfo.dimensions,
