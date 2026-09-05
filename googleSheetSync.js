@@ -34,6 +34,17 @@ const LOW_STOCK_THRESHOLD = 5;
 // Section-header text (normalized: collapsed whitespace, lowercased) ->
 // this app's actual category values (see AddBooks.jsx's category <select>).
 // "" is the bucket for rows before the first section header in the sheet.
+//
+// Several of these ("penguin classics collection", "oxford classic
+// collection", "projapoti classic", "everyman's library collection", ...)
+// all map to the SAME category ("classics"). That's intentional for
+// category/browsing purposes, but it used to mean the sheet's actual
+// section - which is what distinguishes real, separately-priced-and-
+// stocked EDITIONS of the same title - was thrown away entirely once
+// mapped down to just "classics". A "Crime and Punishment" row under
+// Penguin Classics and one under Oxford Classic are two different physical
+// products, not the same catalog entry - see `edition` in parseBookRows
+// below, which now keeps the section text itself for exactly this.
 const CATEGORY_MAP = {
   "": "fiction",
   "romantic books collection": "romance",
@@ -58,6 +69,20 @@ const CATEGORY_MAP = {
   "penguin clothbound classic": "classics",
   "macmillan collectors library": "classics",
 };
+
+// Cleans up a raw section-header for storage/display as `edition` - title
+// cases it instead of keeping the sheet's often ALL-CAPS or stray-space
+// formatting verbatim ("OXFORD CLASSIC COLLECTION   " -> "Oxford Classic
+// Collection"). The blank/pre-first-header bucket has no real edition name.
+function formatEdition(sectionTitle) {
+  // Google Sheets' CSV export HTML-entity-escapes "&" in some cells
+  // ("Manga & Comics Collection" -> "Manga &amp; Comics Collection") -
+  // undo that here rather than storing the escaped form as if it were the
+  // real text.
+  const cleaned = normalize(sectionTitle).replace(/&amp;/g, "&");
+  if (!cleaned) return "";
+  return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
+}
 
 // Reused elsewhere in the app as a generic Book Ocean BD fallback image
 // (see bookOceanBD/scripts/generate-og-pages.cjs) - reusing it here too
@@ -179,6 +204,7 @@ function parseBookRows(rows) {
   const dataRows = headerIndex >= 0 ? rows.slice(headerIndex + 1) : rows;
 
   let currentCategory = mapCategory("");
+  let currentEdition = formatEdition("");
   const books = [];
 
   for (const row of dataRows) {
@@ -187,9 +213,14 @@ function parseBookRows(rows) {
     const snText = (sn || "").trim();
 
     if (!hasName) {
-      // section header (or a blank separator row, which we just skip)
-      if (snText !== "") {
+      // section header (or a blank separator row, which we just skip). A
+      // real section title always has letters in it ("Fantasy Collection")
+      // - a bare number here is some other kind of stray/separator row in
+      // the sheet, not an actual header, so it's ignored rather than
+      // treated as a (nonsensical) edition name like "20".
+      if (snText !== "" && /[a-zA-Z]/.test(snText)) {
         currentCategory = mapCategory(snText);
+        currentEdition = formatEdition(snText);
       }
       continue;
     }
@@ -199,6 +230,7 @@ function parseBookRows(rows) {
       name: name.trim(),
       author: (author || "").trim() || "Unknown",
       category: currentCategory,
+      edition: currentEdition,
       price: parsePrice(price),
       quantity: stockCount,
       available: stockCount > 0 ? "true" : "false",
@@ -215,13 +247,17 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
 
   // grouped by NAME (the primary key) - each name maps to the list of
   // existing catalog entries with that title, since more than one is
-  // legitimate (different authors' "Selected Poems", etc.)
-  const existingBooks = await booksCollection.find({}, { projection: { name: 1, author: 1, quantity: 1 } }).toArray();
+  // legitimate: different authors' "Selected Poems", but ALSO the same
+  // book in different editions (Penguin Classics vs Oxford Classic vs
+  // Projapoti Classic, etc) - each a separately priced/stocked product,
+  // not the same catalog entry, even though the sheet's section headers
+  // that distinguish them all map to the same *category* ("classics").
+  const existingBooks = await booksCollection.find({}, { projection: { name: 1, author: 1, quantity: 1, edition: 1 } }).toArray();
   const byName = new Map();
   for (const b of existingBooks) {
     const key = normalizeForMatch(b.name);
     if (!byName.has(key)) byName.set(key, []);
-    byName.get(key).push({ id: b._id, author: b.author, quantity: b.quantity });
+    byName.get(key).push({ id: b._id, author: b.author, quantity: b.quantity, edition: b.edition || null });
   }
 
   const bulkOps = [];
@@ -235,7 +271,25 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
     categoryCounts[book.category] = (categoryCounts[book.category] || 0) + 1;
     const nameKey = normalizeForMatch(book.name);
     const candidates = byName.get(nameKey) || [];
-    const existing = candidates.find((c) => authorsMatch(c.author, book.author));
+
+    // 1. an existing entry already recorded with this exact edition wins
+    let existing = candidates.find((c) => c.edition && normalize(c.edition) === normalize(book.edition) && authorsMatch(c.author, book.author));
+
+    // 2. no candidate has this edition on file yet - if there's exactly one
+    //    candidate with NO edition recorded at all (i.e. it predates this
+    //    field existing), treat it as this edition and backfill the field,
+    //    rather than creating a duplicate for every already-cataloged book.
+    //    Only when it's unambiguous: 2+ edition-less candidates for the same
+    //    name means we genuinely don't know which one this sheet row is, so
+    //    a new entry is created instead of guessing wrong.
+    let backfillEdition = false;
+    if (!existing) {
+      const editionlessCandidates = candidates.filter((c) => !c.edition);
+      if (editionlessCandidates.length === 1 && authorsMatch(editionlessCandidates[0].author, book.author)) {
+        existing = editionlessCandidates[0];
+        backfillEdition = true;
+      }
+    }
 
     if (existing && existing.id === null) {
       // matches a row already created earlier in THIS SAME run (a
@@ -244,6 +298,7 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
     } else if (existing) {
       const setFields = { available: book.available, quantity: book.quantity };
       if (book.price != null) setFields.price = book.price;
+      if (backfillEdition) setFields.edition = book.edition;
       bulkOps.push({ updateOne: { filter: { _id: existing.id }, update: { $set: setFields } } });
       updated++;
 
@@ -260,6 +315,7 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
         name: book.name,
         author: book.author,
         category: book.category,
+        edition: book.edition,
         price: book.price || 0,
         quantity: book.quantity,
         available: book.available,
@@ -279,14 +335,14 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
         needsCoverImage: true,
       };
       bulkOps.push({ insertOne: { document: newBookDoc } });
-      newlyCreated.push({ name: book.name, author: book.author, category: book.category, price: book.price });
+      newlyCreated.push({ name: book.name, author: book.author, category: book.category, edition: book.edition, price: book.price });
       created++;
       // dedupe within this same run - a duplicated row in the sheet
       // shouldn't create the same book twice (no real _id yet since this
       // hasn't been written; later rows just need this candidate to exist
       // for the authorsMatch check, not a real id to update against)
       if (!byName.has(nameKey)) byName.set(nameKey, []);
-      byName.get(nameKey).push({ id: null, author: book.author, quantity: book.quantity });
+      byName.get(nameKey).push({ id: null, author: book.author, quantity: book.quantity, edition: book.edition || null });
     }
   }
 
