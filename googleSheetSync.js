@@ -12,13 +12,14 @@
 // Collection"), which we track as we walk through the rows.
 //
 // Behavior (see conversation for why):
-//   - Existing book (matched by name+author, case-insensitive): only
-//     price, quantity, and availability (derived: quantity > 0) are
-//     updated. Nothing else is touched.
+//   - Existing book (matched by name+edition, falling back to name+author
+//     for entries that predate edition tracking): only price, quantity,
+//     and availability (derived: quantity > 0) are updated. Nothing else
+//     is touched.
 //   - Book not found in the catalog: created with name/author/category/
-//     price/quantity/availability from the sheet, a placeholder cover
-//     image, and needsCoverImage: true so it's easy to find and finish
-//     manually later.
+//     edition/price/quantity/availability from the sheet. No image is set -
+//     covers are uploaded manually via the admin Edit Book page - and
+//     needsCoverImage: true flags it for that manual follow-up.
 //
 // Uses one query to load all existing {name, author} pairs into memory and
 // a single bulkWrite for every insert/update, instead of one round trip per
@@ -83,11 +84,6 @@ function formatEdition(sectionTitle) {
   if (!cleaned) return "";
   return cleaned.replace(/\b\w/g, (c) => c.toUpperCase());
 }
-
-// Reused elsewhere in the app as a generic Book Ocean BD fallback image
-// (see bookOceanBD/scripts/generate-og-pages.cjs) - reusing it here too
-// instead of hosting a new placeholder asset.
-const PLACEHOLDER_IMAGE = "https://i.ibb.co/yhDbPYf/logo2.jpg";
 
 function normalize(text) {
   return (text || "").toString().replace(/\s+/g, " ").trim().toLowerCase();
@@ -319,8 +315,11 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
         price: book.price || 0,
         quantity: book.quantity,
         available: book.available,
-        image: PLACEHOLDER_IMAGE,
-        thumbnail: PLACEHOLDER_IMAGE,
+        // deliberately no auto-assigned image/thumbnail - covers get
+        // uploaded manually via the admin Edit Book page. needsCoverImage
+        // below is what flags these for that manual follow-up.
+        image: null,
+        thumbnail: null,
         description: "",
         publisher: "",
         language: "",
