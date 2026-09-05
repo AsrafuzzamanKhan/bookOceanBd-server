@@ -1,7 +1,7 @@
 const express = require("express");
 const cors = require("cors");
 const compression = require("compression"); // Added for speed
-const { ObjectId, MongoClient, ServerApiVersion} = require("mongodb");
+const { ObjectId, MongoClient, ServerApiVersion } = require("mongodb");
 const jwt = require("jsonwebtoken");
 require("dotenv").config();
 const { initFirebaseAdminLite } = require("./firebaseAdminLite");
@@ -49,7 +49,11 @@ app.use(cors());
 app.use(express.json());
 
 // connect mongodb 
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.6kqiq.mongodb.net/?retryWrites=true&w=majority`;
+// const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.6kqiq.mongodb.net/?retryWrites=true&w=majority`;
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.vq5jqil.mongodb.net/?retryWrites=true&w=majority`;
+
+
+
 // Create a MongoClient with a MongoClientOptions object to set the Stable API version
 const client = new MongoClient(uri, {
   serverApi: {
@@ -325,26 +329,22 @@ async function run() {
 
     // books
     //
-    // TEMPORARY STOPGAP (as of the 2026-09-02 outage): capped at 600 and
-    // trimmed to only the fields list views actually use. The underlying
-    // problem is that this MongoDB cluster is on Atlas's free M0 tier,
-    // which throttles hard enough that even a lean, capped read of this
-    // collection takes several seconds - full descriptions for all ~2000
-    // books was pushing every single page load past Vercel's request
-    // timeout and taking the whole site down. Once the cluster is upgraded
-    // off M0, both the projection and the .limit(600) below should be
-    // revisited - the projection can likely stay (no real reason to ship
-    // description/isbn/etc to a book-card grid that never shows them), but
-    // the limit should go so the full catalog shows in listings/search
-    // again. GET /books/:id below is NOT capped or limited - every book is
-    // still fully reachable by direct link/id regardless of this.
+    // The temporary limit(600) cap from the 2026-09-02 outage is gone now
+    // that this collection lives on its own dedicated cluster (was
+    // previously sharing a throttled free-tier cluster with unrelated
+    // projects - see that migration). The field projection stays: it's a
+    // legitimate optimization on its own, unrelated to the outage - this
+    // list feeds book cards/search/category pages, none of which use
+    // description/isbn/publisher/etc, only the individual book detail page
+    // does (see GET /books/:id below, which fetches the full document).
     app.get("/books", async (req, res) => {
       const result = await booksCollection
-        .find({}, { projection: {
-          name: 1, author: 1, price: 1, image: 1, thumbnail: 1, available: 1,
-          newBook: 1, category: 1, cover: 1, quantity: 1, best: 1, itemWeight: 1,
-        } })
-        .limit(600)
+        .find({}, {
+          projection: {
+            name: 1, author: 1, price: 1, image: 1, thumbnail: 1, available: 1,
+            newBook: 1, category: 1, cover: 1, quantity: 1, best: 1, itemWeight: 1,
+          }
+        })
         .toArray();
       res.send(result);
     });
