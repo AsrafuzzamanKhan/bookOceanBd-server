@@ -253,7 +253,7 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
   for (const b of existingBooks) {
     const key = normalizeForMatch(b.name);
     if (!byName.has(key)) byName.set(key, []);
-    byName.get(key).push({ id: b._id, author: b.author, quantity: b.quantity, edition: b.edition || null });
+    byName.get(key).push({ id: b._id, name: b.name, author: b.author, quantity: b.quantity, edition: b.edition || null });
   }
 
   const bulkOps = [];
@@ -296,11 +296,24 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
         if (authorMatched.length === 1) {
           existing = authorMatched[0];
           backfillEdition = true;
+        } else if (authorMatched.length > 1) {
+          // still ambiguous by author alone - but some of these candidates
+          // predate edition tracking entirely and had their edition spelled
+          // out in the NAME itself instead ("The Count of Monte Cristo
+          // ( penguin classic )"), rather than left blank ("The Count of
+          // Monte Cristo"). The sheet row's own full name (not just its
+          // edition-stripped nameKey) already identifies exactly which one
+          // that is - safe to use when it's unambiguous.
+          const nameMatched = authorMatched.filter((c) => c.name && normalize(c.name) === normalize(book.name));
+          if (nameMatched.length === 1) {
+            existing = nameMatched[0];
+            backfillEdition = true;
+          }
+          // still 0 or 2+ matches: genuinely ambiguous (or a real
+          // pre-existing duplicate for the dedupe script to merge, e.g. two
+          // "East of Eden" rows both by John Steinbeck) - fall through to
+          // creating a new entry rather than guessing wrong.
         }
-        // 0 or 2+ author-matched candidates: still genuinely ambiguous (or a
-        // real pre-existing duplicate for the dedupe script to merge, e.g.
-        // two "East of Eden" rows both by John Steinbeck) - fall through to
-        // creating a new entry rather than guessing wrong.
       }
     }
 
@@ -371,7 +384,7 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
       // hasn't been written; later rows just need this candidate to exist
       // for the authorsMatch check, not a real id to update against)
       if (!byName.has(nameKey)) byName.set(nameKey, []);
-      byName.get(nameKey).push({ id: null, author: book.author, quantity: book.quantity, edition: book.edition || null });
+      byName.get(nameKey).push({ id: null, name: book.name, author: book.author, quantity: book.quantity, edition: book.edition || null });
     }
   }
 
