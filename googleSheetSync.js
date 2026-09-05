@@ -276,16 +276,46 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
     //    field existing), treat it as this edition and backfill the field,
     //    rather than creating a duplicate for every already-cataloged book.
     //    Only when it's unambiguous: 2+ edition-less candidates for the same
-    //    name means we genuinely don't know which one this sheet row is, so
-    //    a new entry is created instead of guessing wrong.
+    //    name means we genuinely don't know which one this sheet row is,
+    //    UNLESS the sheet row's author uniquely narrows it down to one of
+    //    them - without this, once a name had 2+ edition-less candidates
+    //    (however that happened) every future sync run would keep creating
+    //    yet another new row for it instead of ever updating the one it
+    //    actually already matches, since none of them can ever gain an
+    //    edition on their own to hit case 1. Confirmed live: ~138 titles
+    //    ("The Midnight Library"/Harper Lee, "American Psycho"/Bret Easton
+    //    Ellis, etc.) were about to be duplicated again on the next sync.
     let backfillEdition = false;
     if (!existing) {
       const editionlessCandidates = candidates.filter((c) => !c.edition);
       if (editionlessCandidates.length === 1 && authorsMatch(editionlessCandidates[0].author, book.author)) {
         existing = editionlessCandidates[0];
         backfillEdition = true;
+      } else if (editionlessCandidates.length > 1) {
+        const authorMatched = editionlessCandidates.filter((c) => authorsMatch(c.author, book.author));
+        if (authorMatched.length === 1) {
+          existing = authorMatched[0];
+          backfillEdition = true;
+        }
+        // 0 or 2+ author-matched candidates: still genuinely ambiguous (or a
+        // real pre-existing duplicate for the dedupe script to merge, e.g.
+        // two "East of Eden" rows both by John Steinbeck) - fall through to
+        // creating a new entry rather than guessing wrong.
       }
     }
+
+    // Record the backfill on the in-memory candidate immediately, not just
+    // in the bulkOp - otherwise, when a title has a real edition on file
+    // (Penguin Classics, say) but the DB has only one legacy edition-less
+    // row for it, that ONE row keeps re-matching "the single edition-less
+    // candidate" for every remaining sheet row of that title in this same
+    // run (Everyman's Library, Oxford Classic, ...), each overwriting the
+    // last one's price/quantity - so a book sold in 3 real editions collapses
+    // into a single DB entry instead of 3. Once backfilled, this candidate
+    // has a real edition and can only be matched again by an identical one
+    // (case 1) or left alone so the next distinct edition creates its own
+    // new row, same as if it had always had this edition on file.
+    if (backfillEdition && book.edition) existing.edition = book.edition;
 
     if (existing && existing.id === null) {
       // matches a row already created earlier in THIS SAME run (a

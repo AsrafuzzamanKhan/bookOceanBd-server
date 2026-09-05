@@ -1,6 +1,11 @@
 require("dotenv").config();
 const { MongoClient, ServerApiVersion } = require("mongodb");
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.6kqiq.mongodb.net/?retryWrites=true&w=majority`;
+// Same dedicated cluster index.js connects to (see its `uri` const) - this
+// script pointed at the old shared cluster0.6kqiq host until now, which the
+// app migrated off of (see "Remove temporary GET /books cap - migrated to a
+// dedicated cluster"). Left stale, this would just fail auth against the
+// current database.
+const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.vq5jqil.mongodb.net/?retryWrites=true&w=majority`;
 
 const DRY_RUN = process.argv.includes("--execute") ? false : true;
 
