@@ -241,6 +241,20 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
   const rows = await fetchSheetRows(sheetUrlOrId);
   const parsedBooks = parseBookRows(rows);
 
+  // sheet rows grouped by nameKey, used below to detect when 2+ rows for
+  // the same title/author share one edition value (a section header
+  // covering multiple real sub-editions - see the edition-match step) -
+  // this has to be known from the SHEET side, not just by counting existing
+  // DB candidates, since the very first time such a pair is ever synced
+  // there's still only one (or zero) DB entries for that edition even
+  // though the sheet already has two genuinely different rows for it.
+  const parsedByNameKey = new Map();
+  for (const b of parsedBooks) {
+    const key = normalizeForMatch(b.name);
+    if (!parsedByNameKey.has(key)) parsedByNameKey.set(key, []);
+    parsedByNameKey.get(key).push(b);
+  }
+
   // grouped by NAME (the primary key) - each name maps to the list of
   // existing catalog entries with that title, since more than one is
   // legitimate: different authors' "Selected Poems", but ALSO the same
@@ -268,8 +282,43 @@ async function syncGoogleSheet(booksCollection, sheetUrlOrId, { dryRun = false }
     const nameKey = normalizeForMatch(book.name);
     const candidates = byName.get(nameKey) || [];
 
-    // 1. an existing entry already recorded with this exact edition wins
-    let existing = candidates.find((c) => c.edition && normalize(c.edition) === normalize(book.edition) && authorsMatch(c.author, book.author));
+    // 1. an existing entry already recorded with this exact edition wins -
+    //    but a single section header sometimes covers 2+ genuinely different
+    //    printings of the same title/author (e.g. "Penguin Classics
+    //    Collection" containing both a plain "Crime and Punishment ( penguin
+    //    classic )" and a separate "Crime and Punishment ( Signet classics )"
+    //    row) - both map to the same edition value, but are different
+    //    physical products with their own price/stock. Detected from the
+    //    SHEET side via siblingCollision below: counting DB candidates alone
+    //    isn't enough, because the first time such a pair gets synced there's
+    //    still only one (or zero) DB entries for that edition even though
+    //    the sheet already has two genuinely different rows for it. Matching
+    //    on edition+author alone here would silently conflate them into one
+    //    DB entry, with whichever row is processed later overwriting the
+    //    earlier one's quantity/availability (and sometimes leaving a
+    //    Frankenstein mix, since price is only overwritten when non-null) -
+    //    confirmed live on "The Count of Monte Cristo" and 37 other titles.
+    //    When a collision exists, the row's own full name (not just its
+    //    edition-stripped nameKey) says which candidate it actually is;
+    //    without one, a single candidate is trusted as before (tolerates
+    //    minor name-formatting differences between sheet and DB).
+    const editionMatched = candidates.filter((c) => c.edition && normalize(c.edition) === normalize(book.edition) && authorsMatch(c.author, book.author));
+    const siblingCollision = (parsedByNameKey.get(nameKey) || []).some((sibling) =>
+      sibling !== book && sibling.edition && normalize(sibling.edition) === normalize(book.edition) &&
+      authorsMatch(sibling.author, book.author) && normalize(sibling.name) !== normalize(book.name)
+    );
+    let existing;
+    if (editionMatched.length === 1 && !siblingCollision) {
+      existing = editionMatched[0];
+    } else if (editionMatched.length >= 1) {
+      const nameMatched = editionMatched.filter((c) => c.name && normalize(c.name) === normalize(book.name));
+      if (nameMatched.length === 1) existing = nameMatched[0];
+      // 0 or 2+ name-matched candidates: still ambiguous - falls through
+      // to the edition-less handling below (won't match there either,
+      // since these candidates do have an edition) and ultimately to
+      // creating a new entry, which is correct: a section with multiple
+      // real sub-editions should end up with one DB row per sub-edition.
+    }
 
     // 2. no candidate has this edition on file yet - if there's exactly one
     //    candidate with NO edition recorded at all (i.e. it predates this
