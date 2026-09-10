@@ -10,6 +10,17 @@ const { syncGoogleSheet, LOW_STOCK_THRESHOLD } = require("./googleSheetSync");
 
 const BOOK_SHEET_URL = "https://docs.google.com/spreadsheets/d/1oJMLhYZrA4Rjiot65zuR75ZmTVrVqQmYDxUNwtNS3U4/edit?gid=0";
 
+// Per-book discount replaced a site-wide fixed 5% - the frontend falls back
+// to 5% for any book that predates this field (see BookCard.jsx/
+// BookDetails.jsx), but whatever an admin actually submits gets clamped
+// here so a typo (a negative number, "50%", 500) can't ever store a value
+// that would make no sense as a percentage.
+function clampDiscountPercent(raw) {
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.min(100, Math.max(0, n));
+}
+
 // Used to generate password reset links server-side so we can email them
 // ourselves (branded, via mailer.js) instead of relying on Firebase's own
 // default email (generic sender, no branding, easily flagged as spam).
@@ -343,6 +354,7 @@ async function run() {
           projection: {
             name: 1, author: 1, price: 1, image: 1, thumbnail: 1, available: 1,
             newBook: 1, category: 1, cover: 1, quantity: 1, best: 1, itemWeight: 1,
+            discount: 1,
           }
         })
         .toArray();
@@ -373,6 +385,9 @@ async function run() {
       } else {
         delete query.quantity;
       }
+      const clampedDiscount = clampDiscountPercent(query.discount);
+      if (clampedDiscount !== undefined) query.discount = clampedDiscount;
+      else delete query.discount;
       const result = await booksCollection.insertOne(query);
       // a book can be added already low/out of stock (e.g. only 2 copies in
       // hand) - worth flagging once immediately, no "previous" value needed
@@ -451,6 +466,13 @@ async function run() {
       // keeps the book's existing cover instead of wiping it out
       if (bookInfo.image) updatedBook.$set.image = bookInfo.image;
       if (bookInfo.thumbnail) updatedBook.$set.thumbnail = bookInfo.thumbnail;
+      // set conditionally, not unconditionally like the fields above - this
+      // driver stores an explicit `undefined` in $set as a real null rather
+      // than omitting the key (see the "New" field bug this same pattern
+      // fixed elsewhere), so a missing/invalid discount must be left out of
+      // $set entirely rather than risk nulling out a book's real value
+      const clampedDiscount = clampDiscountPercent(bookInfo.discount);
+      if (clampedDiscount !== undefined) updatedBook.$set.discount = clampedDiscount;
       const result = await booksCollection.updateOne(
         filter,
         updatedBook,
